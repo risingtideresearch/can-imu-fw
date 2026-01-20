@@ -1,0 +1,57 @@
+device_name = "canimu"
+software_version = "v0.0.1"
+hardware_version = "rev1"
+heartbeat_period = 1000
+
+
+[identity]
+vendor_id = 0xCAFE
+product_code = 1033
+revision_number = 1
+
+[pdos]
+num_tpdo = 4
+num_rpdo = 0
+
+[pdos.tpdo.0]
+enabled = true
+cob_id = 0x200
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2000, sub=1, size=16},
+    { index = 0x2000, sub=2, size=16},
+    { index = 0x2000, sub=3, size=16},
+]
+
+[pdos.tpdo.1]
+enabled = true
+cob_id = 0x201
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2001, sub=1, size=16},
+    { index = 0x2001, sub=2, size=16},
+    { index = 0x2001, sub=3, size=16},
+]
+
+# The raw 12-bit ADC readings
+[[objects]]
+index = 0x2000
+parameter_name = "Gyros"
+object_type = "array"
+data_type = "int16"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+[[objects]]
+index = 0x2001
+parameter_name = "Accels"
+object_type = "array"
+data_type = "int16"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+

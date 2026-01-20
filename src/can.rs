@@ -1,6 +1,6 @@
 use core::{
     cell::RefCell,
-    num::{NonZeroU8, NonZeroU16},
+    num::NonZeroU8,
 };
 
 use crate::pac;

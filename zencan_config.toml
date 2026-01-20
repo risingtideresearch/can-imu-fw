@@ -10,7 +10,7 @@ product_code = 1033
 revision_number = 1
 
 [pdos]
-num_tpdo = 4
+num_tpdo = 6
 num_rpdo = 0
 
 [pdos.tpdo.0]
@@ -30,28 +30,99 @@ cob_id = 0x201
 add_node_id = false
 transmission_type = 254
 mappings = [
-    { index = 0x2001, sub=1, size=16},
-    { index = 0x2001, sub=2, size=16},
-    { index = 0x2001, sub=3, size=16},
+    { index = 0x2002, sub=1, size=16},
+    { index = 0x2002, sub=2, size=16},
+    { index = 0x2002, sub=3, size=16},
 ]
 
-# The raw 12-bit ADC readings
+# 16-bit gyro rates from ICM20948
 [[objects]]
 index = 0x2000
-parameter_name = "Gyros"
+parameter_name = "ICM20948 Gyros (Range +/- 1000 deg/s)"
 object_type = "array"
 data_type = "int16"
 access_type = "ro"
 array_size = 3
 pdo_mapping = "tpdo"
 
+# f32 gyro rates from ICM20948
 [[objects]]
 index = 0x2001
-parameter_name = "Accels"
+parameter_name = "ICM20948 Accels (rad/s)"
+object_type = "array"
+data_type = "real32"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+# 16-bit accels from ICM20948
+[[objects]]
+index = 0x2002
+parameter_name = "ICM20948 Accels (Range +/- 8g)"
 object_type = "array"
 data_type = "int16"
 access_type = "ro"
 array_size = 3
 pdo_mapping = "tpdo"
 
+# f32 accels from ICM20948
+[[objects]]
+index = 0x2003
+parameter_name = "ICM20948 Accels (g)"
+object_type = "array"
+data_type = "real32"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
 
+# 16-bit magnetic field from ICM20948
+# 0.15 µT/LSB
+[[objects]]
+index = 0x2004
+parameter_name = "ICM20948 Mag (Range +/- 4915.2 uT)"
+object_type = "array"
+data_type = "int16"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+# f32 magnetic field from ICM20948
+[[objects]]
+index = 0x2005
+parameter_name = "ICM20948 Mag (µT)"
+object_type = "array"
+data_type = "real32"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+
+# ICM20948 Gyro Offsets 
+# This value is subtracted from the gyro values
+[[objects]]
+index = 0x2010
+parameter_name = "Rate offsets (rad/s)"
+object_type = "array"
+data_type = "real32"
+access_type = "ro"
+array_size = 3
+pdo_mapping = "tpdo"
+
+# Heave
+[[objects]]
+index = 0x2100
+parameter_name = "Heave (m)"
+object_type = "var"
+data_type = "real32"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+# Pitch Roll
+[[objects]]
+index = 0x2110
+parameter_name = "Pitch and Roll (rad)"
+object_type = "array"
+data_type = "real32"
+access_type = "ro"
+array_size = 2
+pdo_mapping = "tpdo"

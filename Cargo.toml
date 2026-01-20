@@ -12,17 +12,18 @@ embedded-hal = "1.0.0"
 embedded-hal-bus = "0.3.0"
 fdcan = { version = "0.2.1", features = ["fdcan_g0_g4_l5"] }
 hash32 = "1.0.0"
-icm20948-rs = { path = "../../icm-20948-rs", version = "0.1.1", features = ["defmt"] }
+icm20948-rs = { git = "https://github.com/1-rafael-1/ICM-20948-rs", version = "0.1.1", features = ["defmt"] }
 lilos = { version = "1.3.0" }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 rtt-target = { version = "0.6.1", features = ["defmt"] }
 stm32-hal2 = { version = "2.1.8", features = ["g431", "g4rt", "embedded_hal"] }
 stm32-metapac = {version = "18.0.0", features = ["stm32g431cb"] }
-zencan-node = { version = "0.0.2", default-features = false, features = ["defmt"]}
-rjmp-stm32-spi = { path = "../../rjmp-stm32-spi", features = ["defmt"] }
+zencan-node = { version = "0.0.3", default-features = false, features = ["defmt"]}
+rjmp-stm32-spi = { git = "https://github.com/mcbridejc/rjmp-stm32-spi", features = ["defmt"] }
+num-traits = { version = "0.2.19", default-features = false }
 
 [build-dependencies]
-zencan-build = { version = "0.0.2" }
+zencan-build = { version = "0.0.3" }
 
 [profile.dev]
 codegen-units = 1       # better optimizations

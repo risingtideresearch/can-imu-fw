@@ -1,82 +1,54 @@
+//! Firmware for rising tide CAN-IMU
+//!
+//! The board provides roll, pitch and heave data on a NMEA2000 bus, and also support CANOpen for
+//! configuration. It supports two IMUs: an expensive Microstrain 3DM-CV7-AHRS, and a cheap
+//! Invensense ICM20948 for comparison.
 #![no_std]
 #![no_main]
 
 use cortex_m_rt::{self as _};
 use defmt::info;
-use embedded_hal::{delay::DelayNs, spi::SpiBus as _};
+use embedded_hal::delay::DelayNs;
 use panic_probe as _;
 use rtt_target::{rtt_init, set_defmt_channel};
-use zencan_node::{Callbacks, Node, common::NodeId, object_dict::ObjectAccess};
+use zencan_node::{
+    Callbacks, Node,
+    common::{NodeId, sdo::AbortCode},
+    object_dict::ObjectAccess,
+};
+
+use num_traits::float::Float;
 
 use core::{convert::Infallible, f32, hash::Hasher as _, pin::pin, time::Duration};
 
 use hash32::FnvHasher;
-use lilos::{
-    exec::{Interrupts, Notify},
-    time::Millis,
-};
+use lilos::exec::{Interrupts, Notify};
 use stm32_hal2::{
     self as hal,
     gpio::{OutputType, Pin, PinMode, Port},
-    spi::{Spi, SpiConfig},
     usart::UsartConfig,
 };
 
-use icm20948::{MagConfig, SpiInterface};
 use icm20948::{
-    interface::Interface,
+    AccelDataG, AccelDlpf, AccelFullScale, GyroDataRps, GyroDlpf, GyroFullScale, InterruptConfig,
+    MagConfig, MagDataUT, SpiInterface,
     sensors::{AccelConfig, GyroConfig},
 };
 
 use stm32_metapac as pac;
 
+/// can module wires up CAN message sending and receiving
 mod can;
 
+// Instantiate zencan static objects
 mod zencan {
     zencan_node::include_modules!(ZENCAN_CONFIG);
 }
 
-// Placeholder until I sort a better driver -- wrap the stm32-hal2 driver to give it a SpiBus impl
-struct SpiBus(Spi<hal::pac::SPI1>);
-
-#[derive(Debug)]
-pub struct SpiError {}
-impl embedded_hal::spi::Error for SpiError {
-    fn kind(&self) -> embedded_hal::spi::ErrorKind {
-        embedded_hal::spi::ErrorKind::Other
-    }
-}
-impl embedded_hal::spi::ErrorType for SpiBus {
-    type Error = SpiError;
-}
-
-impl embedded_hal::spi::SpiBus for SpiBus {
-    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.transfer(words).map_err(|_| SpiError {})
-    }
-
-    fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        self.0
-            .transfer_type2(words, &mut [])
-            .map_err(|_| SpiError {})
-    }
-
-    fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
-        self.0.transfer_type2(write, read).map_err(|_| SpiError {})
-    }
-
-    fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.transfer(words).map_err(|_| SpiError {})
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
+/// A notification used to wake the zencan process
 static CAN_NOTIFY: Notify = Notify::new();
 
-/// Callback to notify CAN task that there are messages to be processed
+/// Callback for zencan to notify task that there are messages to be processed
 fn notify_can_task() {
     CAN_NOTIFY.notify();
 }
@@ -91,19 +63,18 @@ fn get_serial() -> u32 {
     digest as u32
 }
 
+/// A simple delay object which busy loops on the lilos systick timer
 struct Delay {}
-
 impl DelayNs for Delay {
     fn delay_ns(&mut self, ns: u32) {
         let start = lilos::time::TickTime::now();
-        while start.elapsed().0 * 1000000 < ns as u64 {
-            defmt::info!("Waiting {} {}", start.elapsed().0, ns);
-        }
+        while start.elapsed().0 * 1000000 < ns as u64 {}
     }
 }
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
+    // Setup RTT for defmt output
     let channels = rtt_init! {
         up: {
             0: {
@@ -112,16 +83,16 @@ fn main() -> ! {
             }
         }
     };
-
     set_defmt_channel(channels.up.0);
 
     let mut cp = cortex_m::Peripherals::take().unwrap();
-
+    let dp = hal::pac::Peripherals::take().unwrap();
     let clock_cfg = hal::clocks::Clocks::default();
     clock_cfg.setup().unwrap();
 
+    info!("Sysclk: {}", clock_cfg.sysclk());
     info!("APB1: {}", clock_cfg.apb1());
-    let dp = hal::pac::Peripherals::take().unwrap();
+    info!("APB2: {}", clock_cfg.apb2());
 
     // Enable clocks
     pac::RCC.apb1enr1().modify(|w| w.set_fdcanen(true));
@@ -165,23 +136,13 @@ fn main() -> ! {
     icm_cs.set_high();
     let _icm_int1 = Pin::new(Port::B, 1, PinMode::Input);
 
-    info!("Setting up UART1");
-
-    let uart =
+    let _uart =
         hal::usart::Usart::new(dp.USART1, 115200, UsartConfig::default(), &clock_cfg).unwrap();
 
-    // let spi = hal::spi::Spi::new(
-    //     dp.SPI1,
-    //     SpiConfig::default(),
-    //     stm32_hal2::spi::BaudRate::Div32,
-    // );
-
-    info!("Setting up NODE");
     //
     // Setup zencan node
     //
     zencan::OBJECT1018.set_serial(get_serial());
-
     let callbacks = Callbacks {
         store_node_config: None,
         store_objects: None,
@@ -191,7 +152,6 @@ fn main() -> ! {
         enter_stopped: None,
         enter_preoperational: None,
     };
-
     let node = Node::new(
         NodeId::new(10).unwrap(),
         callbacks,
@@ -213,20 +173,14 @@ fn main() -> ! {
     let spi_config = rjmp_stm32_spi::SpiConfig {
         data_size: rjmp_stm32_spi::DataSize::D8,
         mode: rjmp_stm32_spi::MODE_0,
-        clock_div: rjmp_stm32_spi::ClockDiv::Div256,
+        clock_div: rjmp_stm32_spi::ClockDiv::Div32,
         bit_order: rjmp_stm32_spi::BitOrder::MsbFirst,
     };
-    defmt::info!("Creating SPI");
-    let mut spi = rjmp_stm32_spi::Spi::spi1(spi_config);
-    let device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, icm_cs).unwrap();
-    defmt::info!("Creating IMU");
-    let mut imu = icm20948::Icm20948Driver::new(SpiInterface::new(device)).unwrap();
-    defmt::info!("Init IMU");
-    imu.init(&mut Delay {}).unwrap();
-    defmt::info!("Starting tasks");
+    let spi = rjmp_stm32_spi::Spi::spi1(spi_config);
+
     unsafe {
         lilos::exec::run_tasks_with_preemption(
-            &mut [pin!(can_task(node)), pin!(imu_task(imu))],
+            &mut [pin!(can_task(node)), pin!(imu_task(spi, icm_cs))],
             lilos::exec::ALL_TASKS,
             Interrupts::Filtered(0xFF),
         )
@@ -244,21 +198,56 @@ async fn can_task(mut node: Node<'_>) -> Infallible {
     }
 }
 
-fn read_spi(spi: &mut SpiBus, addr: u8, buf: &mut [u8]) -> Result<(), SpiError> {
-    // spi.transfer_in_place(&mut [addr | (1 << 7)])?;
-    // spi.transfer_in_place(buf)?;
+#[inline]
+/// Function to store IMU data to object dict
+/// 
+/// Mainly motivated by the belief that it will create less panic sites and therefore smaller code
+/// although this is an untested theory
+fn store_icm20948_values(
+    gyro: GyroDataRps,
+    accel: AccelDataG,
+    mag: MagDataUT,
+) -> Result<(), AbortCode> {
+    const GYRO_SCALE: f32 = 32768.0 / 1000.0 * core::f32::consts::PI / 180.0; // LSB per deg/s
+    const ACCEL_SCALE: f32 = 32768.0 / 8.0; // LSB per g
+    const MAG_SCALE: f32 = 1.0 / 0.015; // LSB per uT
+    zencan::OBJECT2000.set(0, (gyro.x * GYRO_SCALE).round() as i16)?;
+    zencan::OBJECT2000.set(1, (gyro.y * GYRO_SCALE).round() as i16)?;
+    zencan::OBJECT2000.set(2, (gyro.z * GYRO_SCALE).round() as i16)?;
+    zencan::OBJECT2001.set(0, gyro.x)?;
+    zencan::OBJECT2001.set(1, gyro.y)?;
+    zencan::OBJECT2001.set(2, gyro.z)?;
 
-    spi.write(&[addr | 1 << 7])?;
-    spi.read(buf)?;
+    zencan::OBJECT2002.set(0, (accel.x * ACCEL_SCALE).round() as i16)?;
+    zencan::OBJECT2002.set(1, (accel.y * ACCEL_SCALE).round() as i16)?;
+    zencan::OBJECT2002.set(2, (accel.z * ACCEL_SCALE).round() as i16)?;
+    zencan::OBJECT2003.set(0, accel.x)?;
+    zencan::OBJECT2003.set(1, accel.y)?;
+    zencan::OBJECT2003.set(2, accel.z)?;
+
+    zencan::OBJECT2004.set(0, (mag.x * MAG_SCALE).round() as i16)?;
+    zencan::OBJECT2004.set(1, (mag.y * MAG_SCALE).round() as i16)?;
+    zencan::OBJECT2004.set(2, (mag.z * MAG_SCALE).round() as i16)?;
+    zencan::OBJECT2005.set(0, mag.x)?;
+    zencan::OBJECT2005.set(1, mag.y)?;
+    zencan::OBJECT2005.set(2, mag.z)?;
+
+    for i in 0..3 {
+        zencan::OBJECT2000.set_event_flag(i)?;
+        zencan::OBJECT2001.set_event_flag(i)?;
+        zencan::OBJECT2002.set_event_flag(i)?;
+        zencan::OBJECT2003.set_event_flag(i)?;
+        zencan::OBJECT2004.set_event_flag(i)?;
+        zencan::OBJECT2005.set_event_flag(i)?;
+    }
     Ok(())
 }
 
-async fn imu_task<I: Interface>(mut imu: icm20948::Icm20948Driver<I>) -> Infallible {
-    use icm20948::{AccelDlpf, AccelFullScale, GyroDlpf, GyroFullScale, InterruptConfig};
-
-    let mut whoami = [0];
-
-    lilos::time::sleep_for(Duration::from_millis(100)).await;
+/// A task for reading data from the IMU
+async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
+    let device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs).unwrap();
+    let mut imu = icm20948::Icm20948Driver::new(SpiInterface::new(device)).unwrap();
+    imu.init(&mut Delay {}).unwrap();
 
     let accel_config = AccelConfig {
         full_scale: AccelFullScale::G8,
@@ -315,31 +304,7 @@ async fn imu_task<I: Interface>(mut imu: icm20948::Icm20948Driver<I>) -> Infalli
         defmt::info!("Gyro: {} {} {}", gyro.x, gyro.y, gyro.z);
         defmt::info!("Mag: {} {} {}", mag.x, mag.y, mag.z);
 
-        const GYRO_RANGE: f32 = 1000.0 * core::f32::consts::PI / 180.0;
-        zencan::OBJECT2000
-            .set(0, (gyro.x * 32768.0 / GYRO_RANGE) as i16)
-            .unwrap();
-        zencan::OBJECT2000
-            .set(1, (gyro.y * 32768.0 / GYRO_RANGE) as i16)
-            .unwrap();
-        zencan::OBJECT2000
-            .set(2, (gyro.z * 32768.0 / GYRO_RANGE) as i16)
-            .unwrap();
-
-        const ACCELL_RANGE: f32 = 8.0;
-        zencan::OBJECT2001
-            .set(0, (accel.x * 32768.0 / ACCELL_RANGE) as i16)
-            .unwrap();
-        zencan::OBJECT2001
-            .set(1, (accel.y * 32768.0 / ACCELL_RANGE) as i16)
-            .unwrap();
-        zencan::OBJECT2001
-            .set(2, (accel.z * 32768.0 / ACCELL_RANGE) as i16)
-            .unwrap();
-
-        zencan::OBJECT2000.set_event_flag(1).unwrap();
-        zencan::OBJECT2001.set_event_flag(2).unwrap();
-
+        store_icm20948_values(gyro, accel, mag).unwrap();
         lilos::time::sleep_for(Duration::from_millis(200)).await;
     }
 }

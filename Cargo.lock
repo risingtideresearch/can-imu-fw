@@ -113,12 +113,13 @@ dependencies = [
  "hash32 1.0.0",
  "icm20948-rs",
  "lilos",
+ "num-traits",
  "panic-probe",
  "rjmp-stm32-spi",
  "rtt-target",
  "stm32-hal2",
  "stm32-metapac 18.0.0",
- "zencan-build 0.0.2",
+ "zencan-build 0.0.3",
  "zencan-node",
 ]
 
@@ -530,6 +531,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "icm20948-rs"
 version = "0.1.1"
+source = "git+https://github.com/1-rafael-1/ICM-20948-rs#4904accafd5e16a00c4458903484f0737998362b"
 dependencies = [
  "defmt 1.0.1",
  "device-driver",
@@ -895,6 +897,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "rjmp-stm32-spi"
 version = "0.0.1"
+source = "git+https://github.com/mcbridejc/rjmp-stm32-spi#fbedbe62ef71f2cb8af5ebc93cba4d077f297073"
 dependencies = [
  "cortex-m",
  "defmt 1.0.1",
@@ -1264,16 +1267,16 @@ dependencies = [
 
 [[package]]
 name = "zencan-build"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bfabdce3d4bb4d0462742d69da559dcb8c88be364302eb7802e3b35099b54ca"
+checksum = "5cbee5f146fe5dd15a00ecda92f344189580afb611184df6a7f4aa7bd8109599"
 dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
  "snafu",
  "syn",
- "zencan-common 0.0.2",
+ "zencan-common 0.0.3",
 ]
 
 [[package]]
@@ -1293,10 +1296,11 @@ dependencies = [
 
 [[package]]
 name = "zencan-common"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fd0844ae75ff85a02510e4f8e683a3573957ec2277dd24e5c8e77ba70238692"
+checksum = "b74ae54b34a85e1241e036d7c81b4ab7e88a1a78e4d24744421bacf281e0554b"
 dependencies = [
+ "chrono",
  "critical-section",
  "defmt 1.0.1",
  "defmt-or-log",
@@ -1323,9 +1327,9 @@ dependencies = [
 
 [[package]]
 name = "zencan-node"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6085b9adf2c2e9b63d332e3e51b20cda36badc7f3872a9ce5c7964fb102b61cc"
+checksum = "b49ad68f5458f72ff157f87b7446ab3d1839f4444e173193643bdbd8c868361d"
 dependencies = [
  "crc16",
  "critical-section",
@@ -1335,7 +1339,7 @@ dependencies = [
  "futures",
  "portable-atomic",
  "static_cell",
- "zencan-common 0.0.2",
+ "zencan-common 0.0.3",
  "zencan-macro",
 ]
 

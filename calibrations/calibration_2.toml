@@ -1,0 +1,21 @@
+# Accel calibration load for board #2
+# Load with: `zencan-cli can0 -c "load-config 10 calibration_2.toml"`
+[[store]]
+index = 0x2020
+sub = 1
+value = 136
+type = "i16"
+
+[[store]]
+index = 0x2020
+sub = 2
+value = 55
+type = "i16"
+
+[[store]]
+index = 0x2020
+sub = 3
+value = -121
+type = "i16"
+
+

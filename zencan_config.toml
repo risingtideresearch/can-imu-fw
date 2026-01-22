@@ -2,7 +2,7 @@ device_name = "canimu"
 software_version = "v0.0.1"
 hardware_version = "rev1"
 heartbeat_period = 1000
-
+autostart = "enabled"
 
 [identity]
 vendor_id = 0xCAFE
@@ -35,10 +35,31 @@ mappings = [
     { index = 0x2002, sub=3, size=16},
 ]
 
+# Heave output
+[pdos.tpdo.2]
+enabled = true
+cob_id = 0x202
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2100, sub=0, size=16},
+]
+
+# Pitch/roll output
+[pdos.tpdo.3]
+enabled = true
+cob_id = 0x203
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2110, sub=1, size=16},
+    { index = 0x2110, sub=2, size=16},
+]
+
 # 16-bit gyro rates from ICM20948
 [[objects]]
 index = 0x2000
-parameter_name = "ICM20948 Gyros (Range +/- 1000 deg/s)"
+parameter_name = "ICM20948 Gyros (Range +/- 500 deg/s)"
 object_type = "array"
 data_type = "int16"
 access_type = "ro"
@@ -58,7 +79,7 @@ pdo_mapping = "tpdo"
 # 16-bit accels from ICM20948
 [[objects]]
 index = 0x2002
-parameter_name = "ICM20948 Accels (Range +/- 8g)"
+parameter_name = "ICM20948 Accels (Range +/- 4g)"
 object_type = "array"
 data_type = "int16"
 access_type = "ro"
@@ -97,32 +118,95 @@ array_size = 3
 pdo_mapping = "tpdo"
 
 
-# ICM20948 Gyro Offsets 
+# ICM20948 Gyro Offsets
 # This value is subtracted from the gyro values
 [[objects]]
 index = 0x2010
 parameter_name = "Rate offsets (rad/s)"
 object_type = "array"
-data_type = "real32"
-access_type = "ro"
+data_type = "int16"
+access_type = "rw"
 array_size = 3
 pdo_mapping = "tpdo"
 
-# Heave
+# Gyro calibration control
+# Bit 0 - Write to initiate a calibration. Cleared by device.
+# Bit 1 - Calibration in progress
+[[objects]]
+index = 0x2011
+parameter_name = "Gyro Calibration Control"
+object_type = "var"
+data_type = "uint8"
+access_type = "rw"
+pdo_mapping = "tpdo"
+
+# ICM20948 Accel Offsets
+# This value is subtracted from the accel values
+[[objects]]
+index = 0x2020
+parameter_name = "Accels offsets (8192 cnts/g)"
+object_type = "array"
+data_type = "int16"
+access_type = "rw"
+array_size = 3
+pdo_mapping = "tpdo"
+
+
+
+# Heave fixed point
 [[objects]]
 index = 0x2100
+parameter_name = "Heave (cm)"
+object_type = "var"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+# heave floating point
+[[objects]]
+index = 0x2101
 parameter_name = "Heave (m)"
 object_type = "var"
 data_type = "real32"
 access_type = "ro"
 pdo_mapping = "tpdo"
 
-# Pitch Roll
+# Pitch Roll Fixed Point
 [[objects]]
 index = 0x2110
+parameter_name = "Pitch and Roll (rad * 1e4)"
+object_type = "record"
+[[objects.subs]]
+sub_index = 1
+parameter_name = "Pitch (rad * 1e4)"
+field_name = "pitch"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+[[objects.subs]]
+sub_index = 2
+parameter_name = "Roll (rad * 1e4)"
+field_name= "roll"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+# Pitch Roll float
+[[objects]]
+index = 0x2111
 parameter_name = "Pitch and Roll (rad)"
-object_type = "array"
+object_type = "record"
+[[objects.subs]]
+sub_index = 1
+parameter_name = "Pitch (rad)"
+field_name = "pitch"
 data_type = "real32"
 access_type = "ro"
-array_size = 2
+pdo_mapping = "tpdo"
+[[objects.subs]]
+sub_index = 2
+parameter_name = "Roll (rad)"
+field_name= "roll"
+data_type = "real32"
+access_type = "ro"
 pdo_mapping = "tpdo"

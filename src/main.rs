@@ -10,7 +10,7 @@ use cortex_m_rt::{self as _};
 use defmt::info;
 use embedded_hal::delay::DelayNs;
 use panic_probe as _;
-use rtt_target::{rtt_init, set_defmt_channel};
+use rtt_target::{ChannelMode, rtt_init, set_defmt_channel};
 use zencan_node::{
     Callbacks, Node,
     common::{NodeId, sdo::AbortCode},
@@ -25,13 +25,13 @@ use hash32::FnvHasher;
 use lilos::exec::{Interrupts, Notify};
 use stm32_hal2::{
     self as hal,
-    gpio::{OutputType, Pin, PinMode, Port},
+    gpio::{Edge, Pin, PinMode, Port},
+    pac::interrupt,
     usart::UsartConfig,
 };
 
 use icm20948::{
-    AccelDataG, AccelDlpf, AccelFullScale, GyroDataRps, GyroDlpf, GyroFullScale, InterruptConfig,
-    MagConfig, MagDataUT, SpiInterface,
+    AccelDlpf, AccelFullScale, GyroDlpf, GyroFullScale, InterruptConfig, MagConfig, SpiInterface,
     sensors::{AccelConfig, GyroConfig},
 };
 
@@ -39,11 +39,16 @@ use stm32_metapac as pac;
 
 /// can module wires up CAN message sending and receiving
 mod can;
+/// state module provides state estimation algorithms
+mod state;
 
 // Instantiate zencan static objects
 mod zencan {
     zencan_node::include_modules!(ZENCAN_CONFIG);
 }
+
+/// A notification for the ICM20948 IRQ
+static ICM_NOTIFY: Notify = Notify::new();
 
 /// A notification used to wake the zencan process
 static CAN_NOTIFY: Notify = Notify::new();
@@ -78,8 +83,9 @@ fn main() -> ! {
     let channels = rtt_init! {
         up: {
             0: {
-                size: 512,
-                name: "defmt",
+                size: 2048,
+                mode: ChannelMode::NoBlockSkip,
+                name: "defmt"
             }
         }
     };
@@ -108,33 +114,37 @@ fn main() -> ! {
     pac::RCC.ahb1enr().modify(|w| w.set_dma1en(true));
 
     pac::RCC.ahb2enr().modify(|w| w.set_gpioben(true));
-    // Setup CAN pins
+    // Setup CAN pins for FDCAN1 alternate function
     let _can_tx = Pin::new(Port::B, 9, PinMode::Alt(9));
     let _can_rx = Pin::new(Port::B, 8, PinMode::Alt(9));
+    // Enable the buffer between the CAN RX output and the MCU The buffer is there because the pin
+    // doubles as BOOT0 during power-on, and is also connected to the DIP switch to enable
+    // bootloader
     let mut can_rx_en = Pin::new(Port::B, 7, PinMode::Output);
+    can_rx_en.set_high();
 
-    can_rx_en.output_type(OutputType::PushPull);
+    // CAN Transceiver put into normal operating mode
     let mut can_stby = Pin::new(Port::B, 6, PinMode::Output);
     can_stby.set_low();
     let mut can_shdn = Pin::new(Port::B, 4, PinMode::Output);
     can_shdn.set_low();
 
-    can_rx_en.set_high();
-
-    info!("CAN Init");
+    // Initialize the CAN peripheral. Message passing between FDCAN and zencan is done in IRQ.
     can::init_can();
 
-    // setup 3DM uart pins
+    // setup 3DM uart pins for Uart1
     let _3dm_rx = Pin::new(Port::A, 10, PinMode::Alt(7));
     let _3dm_tx = Pin::new(Port::A, 9, PinMode::Alt(7));
 
-    // Setup ICM IMU SPI pins
+    // Setup ICM IMU pins on SPI1
     let _icm_sdi = Pin::new(Port::A, 7, PinMode::Alt(5));
     let _icm_sdo = Pin::new(Port::A, 6, PinMode::Alt(5));
     let _icm_sck = Pin::new(Port::A, 5, PinMode::Alt(5));
     let mut icm_cs = Pin::new(Port::B, 0, PinMode::Output);
     icm_cs.set_high();
-    let _icm_int1 = Pin::new(Port::B, 1, PinMode::Input);
+
+    let mut icm_int1 = Pin::new(Port::B, 1, PinMode::Input);
+    icm_int1.enable_interrupt(Edge::Rising);
 
     let _uart =
         hal::usart::Usart::new(dp.USART1, 115200, UsartConfig::default(), &clock_cfg).unwrap();
@@ -167,6 +177,7 @@ fn main() -> ! {
     zencan::NODE_MBOX.set_transmit_notify_callback(&can::transmit_notify_handler);
 
     unsafe { cortex_m::interrupt::enable() };
+    unsafe { cortex_m::peripheral::NVIC::unmask(pac::Interrupt::EXTI1) };
 
     lilos::time::initialize_sys_tick(&mut cp.SYST, clock_cfg.systick());
 
@@ -198,39 +209,97 @@ async fn can_task(mut node: Node<'_>) -> Infallible {
     }
 }
 
+fn gyro_rps_from_raw(gyro: (i16, i16, i16)) -> (f32, f32, f32) {
+    const DEG2RAD: f32 = core::f32::consts::PI / 180.0;
+    const GYRO_SCALE: f32 = 500.0 * DEG2RAD / 32768.0;
+    (
+        gyro.0 as f32 * GYRO_SCALE,
+        gyro.1 as f32 * GYRO_SCALE,
+        gyro.2 as f32 * GYRO_SCALE,
+    )
+}
+
+const G_MPSS: f32 = 9.80665;
+
+fn accel_mpss_from_raw(accel: (i16, i16, i16)) -> (f32, f32, f32) {
+    const ACCEL_SCALE: f32 = 4.0 * G_MPSS / 32768.0; // m/s/s per LSB
+    (
+        accel.0 as f32 * ACCEL_SCALE,
+        accel.1 as f32 * ACCEL_SCALE,
+        accel.2 as f32 * ACCEL_SCALE,
+    )
+}
+
+fn accel_g_from_raw(accel: (i16, i16, i16)) -> (f32, f32, f32) {
+    const ACCEL_SCALE: f32 = 4.0 / 32768.0; // g per LSB
+    (
+        accel.0 as f32 * ACCEL_SCALE,
+        accel.1 as f32 * ACCEL_SCALE,
+        accel.2 as f32 * ACCEL_SCALE,
+    )
+}
+
+fn offset_gyros(mut gyro: (i16, i16, i16)) -> (i16, i16, i16) {
+    let gyro_x_offset = zencan::OBJECT2010.get(0).unwrap_or(0);
+    let gyro_y_offset = zencan::OBJECT2010.get(1).unwrap_or(0);
+    let gyro_z_offset = zencan::OBJECT2010.get(2).unwrap_or(0);
+    gyro.0 = gyro.0.saturating_sub(gyro_x_offset);
+    gyro.1 = gyro.1.saturating_sub(gyro_y_offset);
+    gyro.2 = gyro.2.saturating_sub(gyro_z_offset);
+    gyro
+}
+
+fn offset_accels(accel: (i16, i16, i16)) -> (i16, i16, i16) {
+    let x_off = zencan::OBJECT2020.get(0).unwrap_or(0);
+    let y_off = zencan::OBJECT2020.get(1).unwrap_or(0);
+    let z_off = zencan::OBJECT2020.get(2).unwrap_or(0);
+    (
+        accel.0.saturating_sub(x_off),
+        accel.1.saturating_sub(y_off),
+        accel.2.saturating_sub(z_off),
+    )
+}
+
+/// Rotate sensor readings into the desired coordinate frame.
+fn rotate_sensors(raw: (i16, i16, i16)) -> (i16, i16, i16) {
+    (-raw.1, -raw.0, -raw.2)
+}
+
 #[inline]
 /// Function to store IMU data to object dict
-/// 
+///
 /// Mainly motivated by the belief that it will create less panic sites and therefore smaller code
 /// although this is an untested theory
 fn store_icm20948_values(
-    gyro: GyroDataRps,
-    accel: AccelDataG,
-    mag: MagDataUT,
+    gyro: (i16, i16, i16),
+    accel: (i16, i16, i16),
+    mag: (i16, i16, i16),
 ) -> Result<(), AbortCode> {
-    const GYRO_SCALE: f32 = 32768.0 / 1000.0 * core::f32::consts::PI / 180.0; // LSB per deg/s
-    const ACCEL_SCALE: f32 = 32768.0 / 8.0; // LSB per g
     const MAG_SCALE: f32 = 1.0 / 0.015; // LSB per uT
-    zencan::OBJECT2000.set(0, (gyro.x * GYRO_SCALE).round() as i16)?;
-    zencan::OBJECT2000.set(1, (gyro.y * GYRO_SCALE).round() as i16)?;
-    zencan::OBJECT2000.set(2, (gyro.z * GYRO_SCALE).round() as i16)?;
-    zencan::OBJECT2001.set(0, gyro.x)?;
-    zencan::OBJECT2001.set(1, gyro.y)?;
-    zencan::OBJECT2001.set(2, gyro.z)?;
 
-    zencan::OBJECT2002.set(0, (accel.x * ACCEL_SCALE).round() as i16)?;
-    zencan::OBJECT2002.set(1, (accel.y * ACCEL_SCALE).round() as i16)?;
-    zencan::OBJECT2002.set(2, (accel.z * ACCEL_SCALE).round() as i16)?;
-    zencan::OBJECT2003.set(0, accel.x)?;
-    zencan::OBJECT2003.set(1, accel.y)?;
-    zencan::OBJECT2003.set(2, accel.z)?;
+    let gyro_rps = gyro_rps_from_raw(gyro);
+    let accel_g = accel_g_from_raw(accel);
 
-    zencan::OBJECT2004.set(0, (mag.x * MAG_SCALE).round() as i16)?;
-    zencan::OBJECT2004.set(1, (mag.y * MAG_SCALE).round() as i16)?;
-    zencan::OBJECT2004.set(2, (mag.z * MAG_SCALE).round() as i16)?;
-    zencan::OBJECT2005.set(0, mag.x)?;
-    zencan::OBJECT2005.set(1, mag.y)?;
-    zencan::OBJECT2005.set(2, mag.z)?;
+    zencan::OBJECT2000.set(0, gyro.0)?;
+    zencan::OBJECT2000.set(1, gyro.1)?;
+    zencan::OBJECT2000.set(2, gyro.2)?;
+    zencan::OBJECT2001.set(0, gyro_rps.0)?;
+    zencan::OBJECT2001.set(1, gyro_rps.1)?;
+    zencan::OBJECT2001.set(2, gyro_rps.2)?;
+
+    zencan::OBJECT2002.set(0, accel.0)?;
+    zencan::OBJECT2002.set(1, accel.1)?;
+    zencan::OBJECT2002.set(2, accel.2)?;
+    zencan::OBJECT2003.set(0, accel_g.0)?;
+    zencan::OBJECT2003.set(1, accel_g.1)?;
+    zencan::OBJECT2003.set(2, accel_g.2)?;
+
+    zencan::OBJECT2004.set(0, mag.0)?;
+    zencan::OBJECT2004.set(1, mag.1)?;
+    zencan::OBJECT2004.set(2, mag.2)?;
+    zencan::OBJECT2005.set(0, mag.0 as f32 * MAG_SCALE)?;
+    zencan::OBJECT2005.set(1, mag.1 as f32 * MAG_SCALE)?;
+    zencan::OBJECT2005.set(2, mag.2 as f32 * MAG_SCALE)?;
 
     for i in 0..3 {
         zencan::OBJECT2000.set_event_flag(i)?;
@@ -240,26 +309,38 @@ fn store_icm20948_values(
         zencan::OBJECT2004.set_event_flag(i)?;
         zencan::OBJECT2005.set_event_flag(i)?;
     }
+
+    // Notify process task it needs to run
+    notify_can_task();
     Ok(())
 }
 
 /// A task for reading data from the IMU
 async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
+    /// The number of samples to collect during gyro calibration
+    const GYRO_CAL_SAMPLES: usize = 200;
+    const OUTPUT_PERIOD: f32 = 0.1;
+    const FSDIV: u16 = 11;
     let device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs).unwrap();
     let mut imu = icm20948::Icm20948Driver::new(SpiInterface::new(device)).unwrap();
-    imu.init(&mut Delay {}).unwrap();
+
+    let mut cal_sample_counter: Option<usize> = None;
+    let mut gyro_accum = [0i32, 0, 0];
+    let sample_period = FSDIV as f32 / 1125.0;
+
+    let mut filter = state::Filter::new(sample_period, OUTPUT_PERIOD);
 
     let accel_config = AccelConfig {
-        full_scale: AccelFullScale::G8,
+        full_scale: AccelFullScale::G4,
         dlpf: AccelDlpf::Hz12,
         dlpf_enable: true,
-        sample_rate_div: 24,
+        sample_rate_div: FSDIV - 1,
     };
     let gyro_config = GyroConfig {
-        full_scale: GyroFullScale::Dps1000,
+        full_scale: GyroFullScale::Dps500,
         dlpf: GyroDlpf::Hz12,
         dlpf_enable: true,
-        sample_rate_div: 24,
+        sample_rate_div: FSDIV as u8 - 1,
     };
     let mag_config = MagConfig {
         mode: icm20948::MagMode::Continuous10Hz,
@@ -269,6 +350,15 @@ async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
         raw_data_ready: true,
         ..Default::default()
     };
+
+    if let Err(_) = imu.init(&mut Delay {}) {
+        defmt::error!("Error initializing ICM");
+    }
+
+    lilos::time::sleep_for(Duration::from_millis(100)).await;
+    if let Err(_) = imu.init_magnetometer(mag_config, &mut Delay {}) {
+        defmt::error!("Error from init_magnetometer");
+    }
     if let Err(_) = imu.configure_accelerometer(accel_config) {
         defmt::error!("Error configuring accel");
     }
@@ -279,32 +369,99 @@ async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
         defmt::error!("Error configuring interrupts");
     }
 
-    imu.init_magnetometer(mag_config, &mut Delay {}).ok();
-
     loop {
-        let accel = imu.read_accelerometer().unwrap_or(icm20948::AccelDataG {
-            x: f32::INFINITY,
-            y: f32::INFINITY,
-            z: f32::INFINITY,
-        });
-        let gyro = imu
-            .read_gyroscope_radians()
-            .unwrap_or(icm20948::GyroDataRps {
-                x: f32::INFINITY,
-                y: f32::INFINITY,
-                z: f32::INFINITY,
-            });
-        let mag = imu.read_magnetometer().unwrap_or(icm20948::MagDataUT {
-            x: f32::INFINITY,
-            y: f32::INFINITY,
-            z: f32::INFINITY,
-        });
+        // Wait for a notification
+        ICM_NOTIFY.until_next().await;
 
-        defmt::info!("Accel: {} {} {}", accel.x, accel.y, accel.z);
-        defmt::info!("Gyro: {} {} {}", gyro.x, gyro.y, gyro.z);
-        defmt::info!("Mag: {} {} {}", mag.x, mag.y, mag.z);
+        // Check status flag, so see if new data is actually available
+        let flag = imu
+            .device_mut()
+            .int_status_1()
+            .read()
+            .unwrap()
+            .raw_data_0_rdy_int();
+        if !flag {
+            info!("NO FLAG");
+            continue;
+        }
 
+        let accel = rotate_sensors(imu.read_accelerometer_raw().unwrap_or((
+            i16::MAX,
+            i16::MAX,
+            i16::MAX,
+        )));
+        let gyro = rotate_sensors(imu.read_gyroscope_raw().unwrap_or((
+            i16::MAX,
+            i16::MAX,
+            i16::MAX,
+        )));
+        let mag = imu
+            .read_magnetometer_raw()
+            .unwrap_or((i16::MAX, i16::MAX, i16::MAX));
+
+        // Check if calibration is in progress or requested
+        let calibration_control = zencan::OBJECT2011.get_value();
+
+        if calibration_control & (1 << 0) != 0 {
+            cal_sample_counter = Some(0);
+            gyro_accum = [0, 0, 0];
+            // Set calibration in progress bit
+            zencan::OBJECT2011.set_value(1 << 1);
+        }
+
+        if cal_sample_counter.is_some() {
+            // In progress cal
+            gyro_accum[0] += gyro.0 as i32;
+            gyro_accum[1] += gyro.1 as i32;
+            gyro_accum[2] += gyro.2 as i32;
+            *cal_sample_counter.as_mut().unwrap() += 1;
+
+            if cal_sample_counter.unwrap() == GYRO_CAL_SAMPLES {
+                for i in 0..3 {
+                    zencan::OBJECT2010
+                        .set(i, (gyro_accum[i] / GYRO_CAL_SAMPLES as i32) as i16)
+                        .unwrap();
+                }
+                cal_sample_counter = None;
+                zencan::OBJECT2011.set_value(0);
+            }
+        }
+
+        let gyro = offset_gyros(gyro);
+        let accel = offset_accels(accel);
         store_icm20948_values(gyro, accel, mag).unwrap();
-        lilos::time::sleep_for(Duration::from_millis(200)).await;
+
+        // Do state estimate update
+        let gyro_rps = gyro_rps_from_raw(gyro);
+        let accel_mpss = accel_mpss_from_raw(accel);
+
+        if let Some(state::FilterSample { pitch, roll, heave }) =
+            filter.push_sample(accel_mpss, gyro_rps)
+        {
+            // Set float tilt
+            zencan::OBJECT2111.set_pitch(pitch);
+            zencan::OBJECT2111.set_roll(roll);
+            // Set integer tilt
+            zencan::OBJECT2110.set_pitch((pitch * 1000.0).round() as i16);
+            zencan::OBJECT2110.set_roll((roll * 1000.0).round() as i16);
+            // Set float heave
+            zencan::OBJECT2101.set_value(heave);
+            // Set integer heave
+            zencan::OBJECT2100.set_value((heave * 100.0).round() as i16);
+
+            zencan::OBJECT2110.set_event_flag(1).ok();
+            zencan::OBJECT2110.set_event_flag(2).ok();
+            zencan::OBJECT2111.set_event_flag(1).ok();
+            zencan::OBJECT2111.set_event_flag(2).ok();
+            zencan::OBJECT2100.set_event_flag(0).ok();
+            zencan::OBJECT2101.set_event_flag(0).ok();
+            notify_can_task();
+        }
     }
+}
+
+#[interrupt]
+fn EXTI1() {
+    hal::gpio::clear_exti_interrupt(1);
+    ICM_NOTIFY.notify();
 }

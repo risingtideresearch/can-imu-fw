@@ -18,12 +18,13 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 rtt-target = { version = "0.6.1", features = ["defmt"] }
 stm32-hal2 = { version = "2.1.8", features = ["g431", "g4rt", "embedded_hal"] }
 stm32-metapac = {version = "18.0.0", features = ["stm32g431cb"] }
-zencan-node = { version = "0.0.3", default-features = false, features = ["defmt"]}
+zencan-node = { git = "https://github.com/mcbridejc/zencan", version = "0.0.3", default-features = false, features = ["defmt"]}
 rjmp-stm32-spi = { git = "https://github.com/mcbridejc/rjmp-stm32-spi", features = ["defmt"] }
 num-traits = { version = "0.2.19", default-features = false }
+num-quaternion = { version = "1.0.7", default-features = false, features = ["libm"] }
 
 [build-dependencies]
-zencan-build = { version = "0.0.3" }
+zencan-build = { git = "https://github.com/mcbridejc/zencan", version = "0.0.3" }
 
 [profile.dev]
 codegen-units = 1       # better optimizations

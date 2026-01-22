@@ -34,22 +34,42 @@ NS_ :
 BS_: 
 BU_: Unnamed9933 
 BO_ 512 Gyro: 6 Vector__XXX
-   SG_ GyroX : 0|16@1- (0.0305176,0) [0|1] "dps" Vector__XXX
-   SG_ GyroY : 16|16@1- (0.0305176,0) [0|1] "dps" Vector__XXX
-   SG_ GyroZ : 32|16@1- (0.0305176,0) [0|1] "dps" Vector__XXX
+   SG_ GyroX : 0|16@1- (0.0152588,0) [0|1] "dps" Vector__XXX
+   SG_ GyroY : 16|16@1- (0.0152588,0) [0|1] "dps" Vector__XXX
+   SG_ GyroZ : 32|16@1- (0.0152588,0) [0|1] "dps" Vector__XXX
 
 BO_ 513 Accels: 6 Vector__XXX
-   SG_ AccelX : 0|16@1- (0.000244141,0) [0|1] "g" Vector__XXX
-   SG_ AccelY : 16|16@1- (0.000244141,0) [0|1] "g" Vector__XXX
-   SG_ AccelZ : 32|16@1- (0.000244141,0) [0|1] "g" Vector__XXX
+   SG_ AccelX : 0|16@1- (0.000122108,0) [0|1] "g" Vector__XXX
+   SG_ AccelY : 16|16@1- (0.000122108,0) [0|1] "g" Vector__XXX
+   SG_ AccelZ : 32|16@1- (0.000122108,0) [0|1] "g" Vector__XXX
+
+BO_ 514 HeaveMsg: 0 Vector__XXX
+   SG_ Heave : 0|16@1- (0.01,0) [0|1] "m" Vector__XXX
+
+BO_ 515 PitchRollMsg: 0 Vector__XXX
+   SG_ Pitch : 0|16@1- (0.0573,0) [0|1] "deg" Vector__XXX
+   SG_ Roll : 16|16@1- (0.0573,0) [0|1] "deg" Vector__XXX
 
 BA_DEF_ BO_ "GenMsgBackgroundColor" STRING ;
 BA_DEF_ BO_ "GenMsgForegroundColor" STRING ;
 BA_DEF_ BO_ "matchingcriteria" INT 0 0;
 BA_DEF_ BO_ "filterlabeling" INT 0 0;
+BA_DEF_ BO_ "matchingcriteria" INT 0 0;
+BA_DEF_ BO_ "filterlabeling" INT 0 0;
+BA_DEF_ BO_ "matchingcriteria" INT 0 0;
+BA_DEF_ BO_ "filterlabeling" INT 0 0;
+BA_DEF_ BO_ "matchingcriteria" INT 0 0;
+BA_DEF_ BO_ "filterlabeling" INT 0 0;
+BA_DEF_ BO_ "matchingcriteria" INT 0 0;
+BA_DEF_ BO_ "filterlabeling" INT 0 0;
 BA_ "GenMsgBackgroundColor" BO_ 512 "#aaffff";
 BA_ "GenMsgBackgroundColor" BO_ 513 "#aaffff";
+BA_ "GenMsgBackgroundColor" BO_ 514 "#ffff00";
+BA_ "GenMsgForegroundColor" BO_ 514 "#000000";
+BA_ "GenMsgBackgroundColor" BO_ 515 "#aaff00";
 BA_DEF_DEF_ "GenMsgBackgroundColor" "#ffffff";
 BA_DEF_DEF_ "GenMsgForegroundColor" "#232629";
 BA_DEF_DEF_ "matchingcriteria" 0;
 BA_DEF_DEF_ "filterlabeling" 1;
+BA_DEF_DEF_ "matchingcriteria" 0;
+BA_DEF_DEF_ "filterlabeling" false;

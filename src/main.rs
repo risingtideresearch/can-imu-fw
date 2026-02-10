@@ -9,17 +9,19 @@
 use cortex_m_rt::{self as _};
 use defmt::info;
 use embedded_hal::delay::DelayNs;
+use embedded_io::Read;
 use panic_probe as _;
 use rtt_target::{ChannelMode, rtt_init, set_defmt_channel};
 use zencan_node::{
     Callbacks, Node,
     common::{NodeId, sdo::AbortCode},
-    object_dict::ObjectAccess,
+    object_dict::{ODEntry, ObjectAccess},
+    restore_stored_comm_objects, restore_stored_objects,
 };
 
 use num_traits::float::Float;
 
-use core::{convert::Infallible, f32, hash::Hasher as _, pin::pin, time::Duration};
+use core::{cell::RefCell, convert::Infallible, f32, hash::Hasher as _, pin::pin, time::Duration};
 
 use hash32::FnvHasher;
 use lilos::exec::{Interrupts, Notify};
@@ -36,6 +38,11 @@ use icm20948::{
 };
 
 use stm32_metapac as pac;
+
+use rjmp_stm32_flash::{
+    DualPageFlash, SectionUpdate, Stm32gxFlash, Stm32gxPagePair, UpdateSource, load_sections,
+    update_sections, write_section,
+};
 
 /// can module wires up CAN message sending and receiving
 mod can;
@@ -66,6 +73,77 @@ fn get_serial() -> u32 {
     ctx.write(&pac::UID.uid(2).read().to_le_bytes());
     let digest = ctx.finish();
     digest as u32
+}
+
+#[repr(u8)]
+enum FlashSections {
+    NodeConfig = 1,
+    Objects = 2,
+    Unknown = 255,
+}
+
+impl From<u8> for FlashSections {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => Self::NodeConfig,
+            2 => Self::Objects,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+fn store_objects<E>(
+    flash: &mut dyn DualPageFlash<Error = E>,
+    reader: &mut dyn embedded_io::Read<Error = Infallible>,
+    size: usize,
+) {
+    if update_sections(
+        flash,
+        &mut [SectionUpdate {
+            section_id: FlashSections::Objects as u8,
+            data: UpdateSource::Reader((reader, size)),
+        }],
+    )
+    .is_err()
+    {
+        defmt::error!("Error storing objects to flash");
+    }
+}
+
+fn store_node_config<E>(flash: &mut dyn DualPageFlash<Error = E>, id: NodeId) {
+    //let mut flash = unsafe { FLASH.as_mut().unwrap().unlock() };
+    let data = [id.raw()];
+    if update_sections(
+        flash,
+        &mut [SectionUpdate {
+            section_id: FlashSections::NodeConfig as u8,
+            data: UpdateSource::Slice(&data),
+        }],
+    )
+    .is_err()
+    {
+        defmt::error!("Error storing node config to flash");
+    }
+}
+
+fn read_persisted_objects<E>(flash: &mut dyn DualPageFlash<Error = E>, restore_fn: impl Fn(&[u8])) {
+    if let Some(sections) = load_sections(flash) {
+        for s in sections {
+            let section_type = FlashSections::from(s.section_id);
+            match section_type {
+                FlashSections::NodeConfig => (), // Ignore
+                FlashSections::Objects => {
+                    defmt::info!("Loaded objects from flash");
+                    restore_fn(s.data);
+                }
+                FlashSections::Unknown => {
+                    defmt::warn!("Found unrecognized flash section {}", s.section_id);
+                }
+            }
+        }
+    } else {
+        defmt::info!("No data found in flash");
+    }
 }
 
 /// A simple delay object which busy loops on the lilos systick timer
@@ -149,19 +227,54 @@ fn main() -> ! {
     let _uart =
         hal::usart::Usart::new(dp.USART1, 115200, UsartConfig::default(), &clock_cfg).unwrap();
 
+    // Read the NMEA mode input pin, and store its value. It is only read at boot
+    let nmea_cfg_pin = Pin::new(Port::A, 4, PinMode::Input);
+    if nmea_cfg_pin.is_high() {
+        zencan::OBJECT2200.set_nmea_enabled(1);
+    } else {
+        zencan::OBJECT2200.set_nmea_enabled(0);
+    }
+
+    let persist_flash = RefCell::new(Stm32gxPagePair::new(60, 62, 2));
+
+    let mut store_node_config = |node_id: NodeId| {
+        let mut flash = persist_flash.borrow_mut();
+        store_node_config(&mut *flash, node_id);
+    };
+    let mut store_objects = |reader: &mut dyn Read<Error = Infallible>, len: usize| {
+        let mut flash = persist_flash.borrow_mut();
+        store_objects(&mut *flash, reader, len);
+    };
+    let mut reset_app = |od: &[ODEntry]| {
+        let mut flash = persist_flash.borrow_mut();
+        // On RESET APP transition, we reload object values to their reset value
+
+        // Restore objects saved to flash
+        read_persisted_objects(&mut *flash, |stored_data| {
+            restore_stored_objects(od, stored_data)
+        });
+    };
+    let mut reset_comms = |od: &[ODEntry]| {
+        let mut flash = persist_flash.borrow_mut();
+        // On reset COMMS, only the communications objects (0x1000-0x1fff) are restored. The node
+        // library will handle restoring the default values before calling the reset_comms callback.
+        // Then the application may restore objects from persistent storage if it supports that.
+        read_persisted_objects(&mut *flash, |stored_data| {
+            restore_stored_comm_objects(od, stored_data)
+        });
+    };
+
     //
     // Setup zencan node
     //
     zencan::OBJECT1018.set_serial(get_serial());
-    let callbacks = Callbacks {
-        store_node_config: None,
-        store_objects: None,
-        reset_app: None,
-        reset_comms: None,
-        enter_operational: None,
-        enter_stopped: None,
-        enter_preoperational: None,
-    };
+
+    let mut callbacks = Callbacks::default();
+    callbacks.store_node_config = Some(&mut store_node_config);
+    callbacks.store_objects = Some(&mut store_objects);
+    callbacks.reset_app = Some(&mut reset_app);
+    callbacks.reset_comms = Some(&mut reset_comms);
+
     let node = Node::new(
         NodeId::new(10).unwrap(),
         callbacks,
@@ -189,6 +302,7 @@ fn main() -> ! {
     };
     let spi = rjmp_stm32_spi::Spi::spi1(spi_config);
 
+    defmt::info!("Starting tasks");
     unsafe {
         lilos::exec::run_tasks_with_preemption(
             &mut [pin!(can_task(node)), pin!(imu_task(spi, icm_cs))],
@@ -354,8 +468,6 @@ async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
     if let Err(_) = imu.init(&mut Delay {}) {
         defmt::error!("Error initializing ICM");
     }
-
-    lilos::time::sleep_for(Duration::from_millis(100)).await;
     if let Err(_) = imu.init_magnetometer(mag_config, &mut Delay {}) {
         defmt::error!("Error from init_magnetometer");
     }
@@ -371,8 +483,7 @@ async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
 
     loop {
         // Wait for a notification
-        ICM_NOTIFY.until_next().await;
-
+        lilos::time::with_timeout(Duration::from_millis(100), ICM_NOTIFY.until_next()).await;
         // Check status flag, so see if new data is actually available
         let flag = imu
             .device_mut()

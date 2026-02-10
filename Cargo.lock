@@ -109,6 +109,7 @@ dependencies = [
  "defmt 1.0.1",
  "embedded-hal 1.0.0",
  "embedded-hal-bus",
+ "embedded-io 0.7.1",
  "fdcan",
  "hash32 1.0.0",
  "icm20948-rs",
@@ -116,6 +117,7 @@ dependencies = [
  "num-quaternion",
  "num-traits",
  "panic-probe",
+ "rjmp-stm32-flash",
  "rjmp-stm32-spi",
  "rtt-target",
  "stm32-hal2",
@@ -305,7 +307,7 @@ checksum = "af0e43acfcbb0bb3b7435cc1b1dbb33596cacfec1eb243336b74a398e0bd6cbf"
 dependencies = [
  "defmt 0.3.100",
  "device-driver-macros",
- "embedded-io",
+ "embedded-io 0.6.1",
  "embedded-io-async",
 ]
 
@@ -379,13 +381,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
+
+[[package]]
 name = "embedded-io-async"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
 dependencies = [
- "embedded-io",
+ "embedded-io 0.6.1",
 ]
+
+[[package]]
+name = "embedded-storage"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a21dea9854beb860f3062d10228ce9b976da520a73474aed3171ec276bc0c032"
 
 [[package]]
 name = "equivalent"
@@ -532,7 +546,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "icm20948-rs"
 version = "0.1.1"
-source = "git+https://github.com/1-rafael-1/ICM-20948-rs#4904accafd5e16a00c4458903484f0737998362b"
+source = "git+https://github.com/1-rafael-1/ICM-20948-rs#7e507aafcc1d6fff2128e2ae4b0e3bd63593bdf3"
 dependencies = [
  "defmt 1.0.1",
  "device-driver",
@@ -906,6 +920,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "rjmp-stm32-flash"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "defmt 1.0.1",
+ "embedded-io 0.7.1",
+ "embedded-storage",
+ "stm32-metapac 19.0.0",
+]
+
+[[package]]
 name = "rjmp-stm32-spi"
 version = "0.0.1"
 source = "git+https://github.com/mcbridejc/rjmp-stm32-spi#fbedbe62ef71f2cb8af5ebc93cba4d077f297073"
@@ -1064,7 +1089,7 @@ dependencies = [
  "cortex-m",
  "defmt 1.0.1",
  "embedded-hal 1.0.0",
- "embedded-io",
+ "embedded-io 0.6.1",
  "num-traits",
  "paste",
  "stm32g4",
@@ -1265,7 +1290,7 @@ dependencies = [
 [[package]]
 name = "zencan-build"
 version = "0.0.3"
-source = "git+https://github.com/mcbridejc/zencan#fbe58e718c21ae0603e8ca2c50905d52daa349da"
+source = "git+https://github.com/mcbridejc/zencan#3fcc8d6c86ff40dce596bde786688be80e4e00b7"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -1278,7 +1303,7 @@ dependencies = [
 [[package]]
 name = "zencan-common"
 version = "0.0.3"
-source = "git+https://github.com/mcbridejc/zencan#fbe58e718c21ae0603e8ca2c50905d52daa349da"
+source = "git+https://github.com/mcbridejc/zencan#3fcc8d6c86ff40dce596bde786688be80e4e00b7"
 dependencies = [
  "chrono",
  "critical-section",
@@ -1294,7 +1319,7 @@ dependencies = [
 [[package]]
 name = "zencan-macro"
 version = "0.0.1"
-source = "git+https://github.com/mcbridejc/zencan#fbe58e718c21ae0603e8ca2c50905d52daa349da"
+source = "git+https://github.com/mcbridejc/zencan#3fcc8d6c86ff40dce596bde786688be80e4e00b7"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -1307,13 +1332,13 @@ dependencies = [
 [[package]]
 name = "zencan-node"
 version = "0.0.3"
-source = "git+https://github.com/mcbridejc/zencan#fbe58e718c21ae0603e8ca2c50905d52daa349da"
+source = "git+https://github.com/mcbridejc/zencan#3fcc8d6c86ff40dce596bde786688be80e4e00b7"
 dependencies = [
  "crc16",
  "critical-section",
  "defmt 1.0.1",
  "defmt-or-log",
- "embedded-io",
+ "embedded-io 0.6.1",
  "futures",
  "portable-atomic",
  "static_cell",

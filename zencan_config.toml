@@ -127,6 +127,7 @@ object_type = "array"
 data_type = "int16"
 access_type = "rw"
 array_size = 3
+persist = true
 pdo_mapping = "tpdo"
 
 # Gyro calibration control
@@ -138,7 +139,7 @@ parameter_name = "Gyro Calibration Control"
 object_type = "var"
 data_type = "uint8"
 access_type = "rw"
-pdo_mapping = "tpdo"
+pdo_mapping = "none"
 
 # ICM20948 Accel Offsets
 # This value is subtracted from the accel values
@@ -149,6 +150,7 @@ object_type = "array"
 data_type = "int16"
 access_type = "rw"
 array_size = 3
+persist = true
 pdo_mapping = "tpdo"
 
 
@@ -210,3 +212,32 @@ field_name= "roll"
 data_type = "real32"
 access_type = "ro"
 pdo_mapping = "tpdo"
+
+#
+# Status
+#
+
+# NMEA Status Register
+# Bit 0 - Boot-up value of the NMEA config switch
+#
+[[objects]]
+index = 0x2200
+parameter_name = "NMEA Status"
+object_type = "record"
+# Bit 0 - Set to boot-up value of the NMEA config switch
+[[objects.subs]]
+sub_index = 1
+parameter_name = "NMEA Enabled"
+field_name = "nmea_enabled"
+data_type = "uint8"
+access_type = "ro"
+pdo_mapping = "none"
+[[objects.subs]]
+sub_index = 2
+parameter_name = "Node Address"
+field_name = "nmea_address"
+data_type = "uint8"
+access_type = "ro"
+pdo_mapping = "none"
+
+

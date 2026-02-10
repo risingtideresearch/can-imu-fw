@@ -40,8 +40,7 @@ use icm20948::{
 use stm32_metapac as pac;
 
 use rjmp_stm32_flash::{
-    DualPageFlash, SectionUpdate, Stm32gxFlash, Stm32gxPagePair, UpdateSource, load_sections,
-    update_sections, write_section,
+    DualPageFlash, SectionUpdate, Stm32gxPagePair, UpdateSource, load_sections, update_sections,
 };
 
 /// can module wires up CAN message sending and receiving

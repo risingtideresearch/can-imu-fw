@@ -47,11 +47,20 @@ BO_ 514 HeaveMsg: 0 Vector__XXX
    SG_ Heave : 0|16@1- (0.01,0) [0|1] "m" Vector__XXX
 
 BO_ 515 PitchRollMsg: 0 Vector__XXX
-   SG_ Pitch : 0|16@1- (0.0573,0) [0|1] "deg" Vector__XXX
-   SG_ Roll : 16|16@1- (0.0573,0) [0|1] "deg" Vector__XXX
+   SG_ Pitch : 0|16@1- (0.00573,0) [0|1] "deg" Vector__XXX
+   SG_ Roll : 16|16@1- (0.00573,0) [0|1] "deg" Vector__XXX
+
+BO_ 770 CM7HeaveMsg: 0 Vector__XXX
+   SG_ CM7Heave : 0|16@1- (0.01,0) [0|1] "" Vector__XXX
+
+BO_ 771 CM7PitchRollMsg: 0 Vector__XXX
+   SG_ CM7Pitch : 0|16@1- (0.00573,0) [0|1] "" Vector__XXX
+   SG_ CM7Roll : 16|16@1- (0.00573,0) [0|1] "" Vector__XXX
 
 BA_DEF_ BO_ "GenMsgBackgroundColor" STRING ;
 BA_DEF_ BO_ "GenMsgForegroundColor" STRING ;
+BA_DEF_ BO_ "matchingcriteria" INT 0 0;
+BA_DEF_ BO_ "filterlabeling" INT 0 0;
 BA_DEF_ BO_ "matchingcriteria" INT 0 0;
 BA_DEF_ BO_ "filterlabeling" INT 0 0;
 BA_DEF_ BO_ "matchingcriteria" INT 0 0;
@@ -67,9 +76,11 @@ BA_ "GenMsgBackgroundColor" BO_ 513 "#aaffff";
 BA_ "GenMsgBackgroundColor" BO_ 514 "#ffff00";
 BA_ "GenMsgForegroundColor" BO_ 514 "#000000";
 BA_ "GenMsgBackgroundColor" BO_ 515 "#aaff00";
+BA_ "GenMsgBackgroundColor" BO_ 770 "#aaaaff";
+BA_ "GenMsgBackgroundColor" BO_ 771 "#ffaaff";
 BA_DEF_DEF_ "GenMsgBackgroundColor" "#ffffff";
 BA_DEF_DEF_ "GenMsgForegroundColor" "#232629";
 BA_DEF_DEF_ "matchingcriteria" 0;
-BA_DEF_DEF_ "filterlabeling" 1;
+BA_DEF_DEF_ "filterlabeling" 0;
 BA_DEF_DEF_ "matchingcriteria" 0;
-BA_DEF_DEF_ "filterlabeling" false;
+BA_DEF_DEF_ "filterlabeling" true;

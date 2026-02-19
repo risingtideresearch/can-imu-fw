@@ -1,6 +1,10 @@
 use num_quaternion::{Q32, ReadMat3x3, UQ32};
 use num_traits::Float;
 
+use crate::icm_imu::G_MPSS;
+
+const HEAVE_TAU: f32 = 15.0; // seconds
+
 #[derive(Clone, Copy, Debug)]
 struct Tilt {
     pitch: f32,
@@ -128,6 +132,23 @@ fn normalize(v: (f32, f32, f32)) -> (f32, f32, f32) {
     (v.0 / mag, v.1 / mag, v.2 / mag)
 }
 
+/// Compute the earth frame z axis acceleration from body euler angles and body accels
+///
+/// # Arguments
+///
+/// - `pitch`: Current pitch angle in rad
+/// - `roll`: Current roll angle in rad
+/// - `accel`: Body acceleration (m/s/s)
+fn vertical_accel_euler(pitch: f32, roll: f32, accel: (f32, f32, f32)) -> f32 {
+    // Get the earth frame "down" vector as a unit vector in body frame
+    let ux = -pitch.sin() * roll.cos();
+    let uy = pitch.cos() * roll.sin();
+    let uz = pitch.cos() * roll.cos();
+
+    // Get earth vertical acceleration (removing gravity)
+    ux * accel.0 + uy * accel.1 + uz * accel.2
+}
+
 pub struct ComplementaryTilt {
     sample_period: f32,
     alpha: f32,
@@ -199,7 +220,7 @@ struct HighPassValue {
     alpha: f32,
 }
 impl HighPassValue {
-    pub fn new(alpha: f32) -> Self {
+    pub const fn new(alpha: f32) -> Self {
         Self {
             y: 0.0,
             last_x: 0.0,
@@ -211,6 +232,7 @@ impl HighPassValue {
         self.y = self.alpha * (self.y + delta_x);
         self.y
     }
+
     pub fn update(&mut self, x: f32) -> f32 {
         let y_new = self.alpha * (self.y + x - self.last_x);
         self.y = y_new;
@@ -231,7 +253,7 @@ pub struct HeaveEstimate {
 }
 
 impl HeaveEstimate {
-    pub fn new(sample_period: f32, alpha: f32) -> Self {
+    pub const fn new(sample_period: f32, alpha: f32) -> Self {
         Self {
             heave: HighPassValue::new(alpha),
             velocity: HighPassValue::new(alpha),
@@ -243,19 +265,9 @@ impl HeaveEstimate {
     /// Update the heave estimate
     ///
     /// # Arguments
-    /// - `pitch`: Current pitch angle in rad
-    /// - `roll`: Current roll angle in rad
-    /// - `accel`: Body acceleration (m/s/s)
-    pub fn update(&mut self, pitch: f32, roll: f32, accel: (f32, f32, f32)) -> f32 {
-        // Get the earth frame "down" vector as a unit vector in body frame
-        let ux = -pitch.sin() * roll.cos();
-        let uy = pitch.cos() * roll.sin();
-        let uz = pitch.cos() * roll.cos();
-
-        // Get earth vertical acceleration (removing gravity)
-        let accel = self
-            .accel
-            .update(ux * accel.0 + uy * accel.1 + uz * accel.2 + crate::G_MPSS);
+    /// - `vert_accel`: The earth-frame z acceleration sample (m/s/s)
+    pub fn update(&mut self, vert_accel: f32) -> f32 {
+        let accel = self.accel.update(vert_accel);
 
         // High-pass filter velocity
         let vel = self.velocity.integrate(accel * self.sample_period);
@@ -276,7 +288,12 @@ pub struct FilterSample {
     pub heave: f32,
 }
 
-pub struct Filter {
+/// Filter for raw data
+///
+/// Performs gyro integration and accel complementary filter to determine attitude
+///
+/// Used for the ICM20948
+pub struct IcmFilter {
     input_period: f32,
     output_period: f32,
     tilt_estimator: ComplementaryTilt,
@@ -287,15 +304,17 @@ pub struct Filter {
     samples_since_output: f32,
 }
 
-impl Filter {
+impl IcmFilter {
     pub fn new(input_period: f32, output_period: f32) -> Self {
         const TILT_ALPHA: f32 = 0.995;
-        const HEAVE_ALPHA: f32 = 0.999;
+
+        let heave_alpha: f32 = f32::exp(-input_period / HEAVE_TAU);
+
         Self {
             input_period,
             output_period,
             tilt_estimator: ComplementaryTilt::new(input_period, TILT_ALPHA),
-            heave_estimator: HeaveEstimate::new(input_period, HEAVE_ALPHA),
+            heave_estimator: HeaveEstimate::new(input_period, heave_alpha),
             prev_pitch: 0.0,
             prev_roll: 0.0,
             prev_heave: 0.0,
@@ -310,7 +329,8 @@ impl Filter {
         gyro_rps: (f32, f32, f32),
     ) -> Option<FilterSample> {
         let (pitch, roll) = self.tilt_estimator.update(accel_mpss, gyro_rps);
-        let heave = self.heave_estimator.update(pitch, roll, accel_mpss);
+        let vert_accel = vertical_accel_euler(pitch, roll, accel_mpss) + G_MPSS;
+        let heave = self.heave_estimator.update(vert_accel);
         self.samples_since_output += 1.0;
         let time_since_output = self.samples_since_output * self.input_period;
         let mut result = None;
@@ -334,5 +354,35 @@ impl Filter {
         self.prev_roll = roll;
 
         result
+    }
+}
+
+/// Filter for the CM7 IMU, which is running its own EKF for attitude estimation
+///
+/// This filter only has to integrated (already corrected) accelerations to obtain heave
+pub struct Cm7Filter {
+    heave_estimate: HeaveEstimate,
+}
+
+impl Cm7Filter {
+    pub fn new(input_period: f32) -> Self {
+        let heave_alpha: f32 = f32::exp(-input_period / HEAVE_TAU);
+        let heave_estimate = HeaveEstimate::new(input_period, heave_alpha);
+        Self { heave_estimate }
+    }
+
+    /// Push a new sample
+    ///
+    /// # Arguments
+    ///
+    /// - `att`: The current attitude in quaternion form
+    /// - `accel`: The current linear accel, with gravity already removed, m/s/s
+    ///
+    /// Returns updated heave estimate in meters
+    pub fn push_sample(&mut self, att: UQ32, accel: (f32, f32, f32)) -> f32 {
+        let vert_accel = att.rotate_vector(accel.into())[2];
+
+        defmt::info!("Vert accel: {}", vert_accel);
+        self.heave_estimate.update(vert_accel)
     }
 }

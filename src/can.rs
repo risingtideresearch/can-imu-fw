@@ -1,7 +1,4 @@
-use core::{
-    cell::RefCell,
-    num::NonZeroU8,
-};
+use core::{cell::RefCell, num::NonZeroU8};
 
 use crate::pac;
 use critical_section::Mutex;

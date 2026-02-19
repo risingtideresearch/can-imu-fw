@@ -13,6 +13,7 @@ revision_number = 1
 num_tpdo = 6
 num_rpdo = 0
 
+# ICM 20948 gyros
 [pdos.tpdo.0]
 enabled = true
 cob_id = 0x200
@@ -24,6 +25,7 @@ mappings = [
     { index = 0x2000, sub=3, size=16},
 ]
 
+# ICM 20948 accels
 [pdos.tpdo.1]
 enabled = true
 cob_id = 0x201
@@ -35,7 +37,7 @@ mappings = [
     { index = 0x2002, sub=3, size=16},
 ]
 
-# Heave output
+# ICM20948 Heave
 [pdos.tpdo.2]
 enabled = true
 cob_id = 0x202
@@ -45,7 +47,7 @@ mappings = [
     { index = 0x2100, sub=0, size=16},
 ]
 
-# Pitch/roll output
+# ICM20948 Pitch/roll output
 [pdos.tpdo.3]
 enabled = true
 cob_id = 0x203
@@ -54,6 +56,27 @@ transmission_type = 254
 mappings = [
     { index = 0x2110, sub=1, size=16},
     { index = 0x2110, sub=2, size=16},
+]
+
+# CM7 Heave
+[pdos.tpdo.4]
+enabled = true
+cob_id = 0x302
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2180, sub=0, size=16},
+]
+
+# CM7 pitch/roll
+[pdos.tpdo.5]
+enabled = true
+cob_id = 0x303
+add_node_id = false
+transmission_type = 254
+mappings = [
+    { index = 0x2190, sub=1, size=16},
+    { index = 0x2190, sub=2, size=16},
 ]
 
 # 16-bit gyro rates from ICM20948
@@ -176,7 +199,7 @@ pdo_mapping = "tpdo"
 # Pitch Roll Fixed Point
 [[objects]]
 index = 0x2110
-parameter_name = "Pitch and Roll (rad * 1e4)"
+parameter_name = "ICM20948 Pitch and Roll (rad * 1e4)"
 object_type = "record"
 [[objects.subs]]
 sub_index = 1
@@ -208,6 +231,69 @@ pdo_mapping = "tpdo"
 [[objects.subs]]
 sub_index = 2
 parameter_name = "Roll (rad)"
+field_name= "roll"
+data_type = "real32"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+#
+# CM7 IMU Data
+# 
+
+# Heave fixed point
+[[objects]]
+index = 0x2180
+parameter_name = "Heave (cm)"
+object_type = "var"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+# heave floating point
+[[objects]]
+index = 0x2181
+parameter_name = "Heave (m)"
+object_type = "var"
+data_type = "real32"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+
+# CM7 Pitch and Roll Fixed
+[[objects]]
+index = 0x2190
+parameter_name = "CM7 Pitch and Roll (rad * 1e4)"
+object_type = "record"
+[[objects.subs]]
+sub_index = 1
+parameter_name = "Pitch (rad * 1e4)"
+field_name = "pitch"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+[[objects.subs]]
+sub_index = 2
+parameter_name = "Roll (rad * 1e4)"
+field_name= "roll"
+data_type = "int16"
+access_type = "ro"
+pdo_mapping = "tpdo"
+
+# Pitch Roll float
+[[objects]]
+index = 0x2191
+parameter_name = "CM7 Pitch and Roll (rad)"
+object_type = "record"
+[[objects.subs]]
+sub_index = 1
+parameter_name = "CM7 Pitch (rad)"
+field_name = "pitch"
+data_type = "real32"
+access_type = "ro"
+pdo_mapping = "tpdo"
+[[objects.subs]]
+sub_index = 2
+parameter_name = "CM7 Roll (rad)"
 field_name= "roll"
 data_type = "real32"
 access_type = "ro"

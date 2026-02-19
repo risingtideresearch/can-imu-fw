@@ -13,15 +13,18 @@ use embedded_io::Read;
 use panic_probe as _;
 use rtt_target::{ChannelMode, rtt_init, set_defmt_channel};
 use zencan_node::{
-    Callbacks, Node,
-    common::{NodeId, sdo::AbortCode},
-    object_dict::{ODEntry, ObjectAccess},
-    restore_stored_comm_objects, restore_stored_objects,
+    Callbacks, Node, common::NodeId, object_dict::ODEntry, restore_stored_comm_objects,
+    restore_stored_objects,
 };
 
-use num_traits::float::Float;
-
-use core::{cell::RefCell, convert::Infallible, f32, hash::Hasher as _, pin::pin, time::Duration};
+use core::{
+    cell::RefCell,
+    convert::Infallible,
+    hash::Hasher as _,
+    pin::pin,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 use hash32::FnvHasher;
 use lilos::exec::{Interrupts, Notify};
@@ -32,24 +35,25 @@ use stm32_hal2::{
     usart::UsartConfig,
 };
 
-use icm20948::{
-    AccelDlpf, AccelFullScale, GyroDlpf, GyroFullScale, InterruptConfig, MagConfig, SpiInterface,
-    sensors::{AccelConfig, GyroConfig},
-};
-
 use stm32_metapac as pac;
 
-use rjmp_stm32_flash::{
-    DualPageFlash, SectionUpdate, Stm32gxPagePair, UpdateSource, load_sections, update_sections,
-};
+use rjmp_stm32_flash::Stm32gxPagePair;
 
 /// can module wires up CAN message sending and receiving
 mod can;
-/// state module provides state estimation algorithms
+// 3DM-CM7 IMU support
+mod cm7_imu;
+/// Flash storage utiltiies / definitions
+mod flash;
+/// ICM20948 IMU support
+mod icm_imu;
+/// state estimation algorithms
 mod state;
 
+use flash::*;
+
 // Instantiate zencan static objects
-mod zencan {
+pub mod zencan {
     zencan_node::include_modules!(ZENCAN_CONFIG);
 }
 
@@ -58,6 +62,12 @@ static ICM_NOTIFY: Notify = Notify::new();
 
 /// A notification used to wake the zencan process
 static CAN_NOTIFY: Notify = Notify::new();
+
+#[allow(static_mut_refs)]
+static mut UART: Option<hal::usart::Usart<hal::pac::USART1>> = None;
+
+static CM7_IMU: microstrain_inertial::interface::AsyncInterface =
+    microstrain_inertial::interface::AsyncInterface::new();
 
 /// Callback for zencan to notify task that there are messages to be processed
 fn notify_can_task() {
@@ -72,77 +82,6 @@ fn get_serial() -> u32 {
     ctx.write(&pac::UID.uid(2).read().to_le_bytes());
     let digest = ctx.finish();
     digest as u32
-}
-
-#[repr(u8)]
-enum FlashSections {
-    NodeConfig = 1,
-    Objects = 2,
-    Unknown = 255,
-}
-
-impl From<u8> for FlashSections {
-    fn from(value: u8) -> Self {
-        match value {
-            1 => Self::NodeConfig,
-            2 => Self::Objects,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-fn store_objects<E>(
-    flash: &mut dyn DualPageFlash<Error = E>,
-    reader: &mut dyn embedded_io::Read<Error = Infallible>,
-    size: usize,
-) {
-    if update_sections(
-        flash,
-        &mut [SectionUpdate {
-            section_id: FlashSections::Objects as u8,
-            data: UpdateSource::Reader((reader, size)),
-        }],
-    )
-    .is_err()
-    {
-        defmt::error!("Error storing objects to flash");
-    }
-}
-
-fn store_node_config<E>(flash: &mut dyn DualPageFlash<Error = E>, id: NodeId) {
-    //let mut flash = unsafe { FLASH.as_mut().unwrap().unlock() };
-    let data = [id.raw()];
-    if update_sections(
-        flash,
-        &mut [SectionUpdate {
-            section_id: FlashSections::NodeConfig as u8,
-            data: UpdateSource::Slice(&data),
-        }],
-    )
-    .is_err()
-    {
-        defmt::error!("Error storing node config to flash");
-    }
-}
-
-fn read_persisted_objects<E>(flash: &mut dyn DualPageFlash<Error = E>, restore_fn: impl Fn(&[u8])) {
-    if let Some(sections) = load_sections(flash) {
-        for s in sections {
-            let section_type = FlashSections::from(s.section_id);
-            match section_type {
-                FlashSections::NodeConfig => (), // Ignore
-                FlashSections::Objects => {
-                    defmt::info!("Loaded objects from flash");
-                    restore_fn(s.data);
-                }
-                FlashSections::Unknown => {
-                    defmt::warn!("Found unrecognized flash section {}", s.section_id);
-                }
-            }
-        }
-    } else {
-        defmt::info!("No data found in flash");
-    }
 }
 
 /// A simple delay object which busy loops on the lilos systick timer
@@ -213,6 +152,15 @@ fn main() -> ! {
     let _3dm_rx = Pin::new(Port::A, 10, PinMode::Alt(7));
     let _3dm_tx = Pin::new(Port::A, 9, PinMode::Alt(7));
 
+    let mut uart =
+        hal::usart::Usart::new(dp.USART1, 115200, UsartConfig::default(), &clock_cfg).unwrap();
+    uart.enable().unwrap();
+    uart.enable_interrupt(hal::usart::UsartInterrupt::TransmitEmpty)
+        .unwrap();
+    uart.enable_interrupt(hal::usart::UsartInterrupt::ReadNotEmpty)
+        .unwrap();
+    unsafe { UART = Some(uart) };
+
     // Setup ICM IMU pins on SPI1
     let _icm_sdi = Pin::new(Port::A, 7, PinMode::Alt(5));
     let _icm_sdo = Pin::new(Port::A, 6, PinMode::Alt(5));
@@ -222,9 +170,6 @@ fn main() -> ! {
 
     let mut icm_int1 = Pin::new(Port::B, 1, PinMode::Input);
     icm_int1.enable_interrupt(Edge::Rising);
-
-    let _uart =
-        hal::usart::Usart::new(dp.USART1, 115200, UsartConfig::default(), &clock_cfg).unwrap();
 
     // Read the NMEA mode input pin, and store its value. It is only read at boot
     let nmea_cfg_pin = Pin::new(Port::A, 4, PinMode::Input);
@@ -290,6 +235,7 @@ fn main() -> ! {
 
     unsafe { cortex_m::interrupt::enable() };
     unsafe { cortex_m::peripheral::NVIC::unmask(pac::Interrupt::EXTI1) };
+    unsafe { cortex_m::peripheral::NVIC::unmask(pac::Interrupt::USART1) };
 
     lilos::time::initialize_sys_tick(&mut cp.SYST, clock_cfg.systick());
 
@@ -304,7 +250,11 @@ fn main() -> ! {
     defmt::info!("Starting tasks");
     unsafe {
         lilos::exec::run_tasks_with_preemption(
-            &mut [pin!(can_task(node)), pin!(imu_task(spi, icm_cs))],
+            &mut [
+                pin!(can_task(node)),
+                pin!(icm_imu::imu_task(spi, icm_cs)),
+                pin!(cm7_imu::cm7_task()),
+            ],
             lilos::exec::ALL_TASKS,
             Interrupts::Filtered(0xFF),
         )
@@ -322,256 +272,48 @@ async fn can_task(mut node: Node<'_>) -> Infallible {
     }
 }
 
-fn gyro_rps_from_raw(gyro: (i16, i16, i16)) -> (f32, f32, f32) {
-    const DEG2RAD: f32 = core::f32::consts::PI / 180.0;
-    const GYRO_SCALE: f32 = 500.0 * DEG2RAD / 32768.0;
-    (
-        gyro.0 as f32 * GYRO_SCALE,
-        gyro.1 as f32 * GYRO_SCALE,
-        gyro.2 as f32 * GYRO_SCALE,
-    )
-}
-
-const G_MPSS: f32 = 9.80665;
-
-fn accel_mpss_from_raw(accel: (i16, i16, i16)) -> (f32, f32, f32) {
-    const ACCEL_SCALE: f32 = 4.0 * G_MPSS / 32768.0; // m/s/s per LSB
-    (
-        accel.0 as f32 * ACCEL_SCALE,
-        accel.1 as f32 * ACCEL_SCALE,
-        accel.2 as f32 * ACCEL_SCALE,
-    )
-}
-
-fn accel_g_from_raw(accel: (i16, i16, i16)) -> (f32, f32, f32) {
-    const ACCEL_SCALE: f32 = 4.0 / 32768.0; // g per LSB
-    (
-        accel.0 as f32 * ACCEL_SCALE,
-        accel.1 as f32 * ACCEL_SCALE,
-        accel.2 as f32 * ACCEL_SCALE,
-    )
-}
-
-fn offset_gyros(mut gyro: (i16, i16, i16)) -> (i16, i16, i16) {
-    let gyro_x_offset = zencan::OBJECT2010.get(0).unwrap_or(0);
-    let gyro_y_offset = zencan::OBJECT2010.get(1).unwrap_or(0);
-    let gyro_z_offset = zencan::OBJECT2010.get(2).unwrap_or(0);
-    gyro.0 = gyro.0.saturating_sub(gyro_x_offset);
-    gyro.1 = gyro.1.saturating_sub(gyro_y_offset);
-    gyro.2 = gyro.2.saturating_sub(gyro_z_offset);
-    gyro
-}
-
-fn offset_accels(accel: (i16, i16, i16)) -> (i16, i16, i16) {
-    let x_off = zencan::OBJECT2020.get(0).unwrap_or(0);
-    let y_off = zencan::OBJECT2020.get(1).unwrap_or(0);
-    let z_off = zencan::OBJECT2020.get(2).unwrap_or(0);
-    (
-        accel.0.saturating_sub(x_off),
-        accel.1.saturating_sub(y_off),
-        accel.2.saturating_sub(z_off),
-    )
-}
-
-/// Rotate sensor readings into the desired coordinate frame.
-fn rotate_sensors(raw: (i16, i16, i16)) -> (i16, i16, i16) {
-    (-raw.1, -raw.0, -raw.2)
-}
-
-#[inline]
-/// Function to store IMU data to object dict
-///
-/// Mainly motivated by the belief that it will create less panic sites and therefore smaller code
-/// although this is an untested theory
-fn store_icm20948_values(
-    gyro: (i16, i16, i16),
-    accel: (i16, i16, i16),
-    mag: (i16, i16, i16),
-) -> Result<(), AbortCode> {
-    const MAG_SCALE: f32 = 1.0 / 0.015; // LSB per uT
-
-    let gyro_rps = gyro_rps_from_raw(gyro);
-    let accel_g = accel_g_from_raw(accel);
-
-    zencan::OBJECT2000.set(0, gyro.0)?;
-    zencan::OBJECT2000.set(1, gyro.1)?;
-    zencan::OBJECT2000.set(2, gyro.2)?;
-    zencan::OBJECT2001.set(0, gyro_rps.0)?;
-    zencan::OBJECT2001.set(1, gyro_rps.1)?;
-    zencan::OBJECT2001.set(2, gyro_rps.2)?;
-
-    zencan::OBJECT2002.set(0, accel.0)?;
-    zencan::OBJECT2002.set(1, accel.1)?;
-    zencan::OBJECT2002.set(2, accel.2)?;
-    zencan::OBJECT2003.set(0, accel_g.0)?;
-    zencan::OBJECT2003.set(1, accel_g.1)?;
-    zencan::OBJECT2003.set(2, accel_g.2)?;
-
-    zencan::OBJECT2004.set(0, mag.0)?;
-    zencan::OBJECT2004.set(1, mag.1)?;
-    zencan::OBJECT2004.set(2, mag.2)?;
-    zencan::OBJECT2005.set(0, mag.0 as f32 * MAG_SCALE)?;
-    zencan::OBJECT2005.set(1, mag.1 as f32 * MAG_SCALE)?;
-    zencan::OBJECT2005.set(2, mag.2 as f32 * MAG_SCALE)?;
-
-    for i in 0..3 {
-        zencan::OBJECT2000.set_event_flag(i)?;
-        zencan::OBJECT2001.set_event_flag(i)?;
-        zencan::OBJECT2002.set_event_flag(i)?;
-        zencan::OBJECT2003.set_event_flag(i)?;
-        zencan::OBJECT2004.set_event_flag(i)?;
-        zencan::OBJECT2005.set_event_flag(i)?;
-    }
-
-    // Notify process task it needs to run
-    notify_can_task();
-    Ok(())
-}
-
-/// A task for reading data from the IMU
-async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallible {
-    /// The number of samples to collect during gyro calibration
-    const GYRO_CAL_SAMPLES: usize = 200;
-    const OUTPUT_PERIOD: f32 = 0.1;
-    const FSDIV: u16 = 11;
-    let device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs).unwrap();
-    let mut imu = icm20948::Icm20948Driver::new(SpiInterface::new(device)).unwrap();
-
-    let mut cal_sample_counter: Option<usize> = None;
-    let mut gyro_accum = [0i32, 0, 0];
-    let sample_period = FSDIV as f32 / 1125.0;
-
-    let mut filter = state::Filter::new(sample_period, OUTPUT_PERIOD);
-
-    let accel_config = AccelConfig {
-        full_scale: AccelFullScale::G4,
-        dlpf: AccelDlpf::Hz12,
-        dlpf_enable: true,
-        sample_rate_div: FSDIV - 1,
-    };
-    let gyro_config = GyroConfig {
-        full_scale: GyroFullScale::Dps500,
-        dlpf: GyroDlpf::Hz12,
-        dlpf_enable: true,
-        sample_rate_div: FSDIV as u8 - 1,
-    };
-    let mag_config = MagConfig {
-        mode: icm20948::MagMode::Continuous10Hz,
-    };
-
-    let irq_config = InterruptConfig {
-        raw_data_ready: true,
-        ..Default::default()
-    };
-
-    if let Err(_) = imu.init(&mut Delay {}) {
-        defmt::error!("Error initializing ICM");
-    }
-    if let Err(_) = imu.init_magnetometer(mag_config, &mut Delay {}) {
-        defmt::error!("Error from init_magnetometer");
-    }
-    if let Err(_) = imu.configure_accelerometer(accel_config) {
-        defmt::error!("Error configuring accel");
-    }
-    if let Err(_) = imu.configure_gyroscope(gyro_config) {
-        defmt::error!("Error configuring gyro");
-    }
-    if let Err(_) = imu.configure_interrupts(&irq_config) {
-        defmt::error!("Error configuring interrupts");
-    }
-
-    loop {
-        // Wait for a notification
-        lilos::time::with_timeout(Duration::from_millis(100), ICM_NOTIFY.until_next()).await;
-        // Check status flag, so see if new data is actually available
-        let flag = imu
-            .device_mut()
-            .int_status_1()
-            .read()
-            .unwrap()
-            .raw_data_0_rdy_int();
-        if !flag {
-            info!("NO FLAG");
-            continue;
-        }
-
-        let accel = rotate_sensors(imu.read_accelerometer_raw().unwrap_or((
-            i16::MAX,
-            i16::MAX,
-            i16::MAX,
-        )));
-        let gyro = rotate_sensors(imu.read_gyroscope_raw().unwrap_or((
-            i16::MAX,
-            i16::MAX,
-            i16::MAX,
-        )));
-        let mag = imu
-            .read_magnetometer_raw()
-            .unwrap_or((i16::MAX, i16::MAX, i16::MAX));
-
-        // Check if calibration is in progress or requested
-        let calibration_control = zencan::OBJECT2011.get_value();
-
-        if calibration_control & (1 << 0) != 0 {
-            cal_sample_counter = Some(0);
-            gyro_accum = [0, 0, 0];
-            // Set calibration in progress bit
-            zencan::OBJECT2011.set_value(1 << 1);
-        }
-
-        if cal_sample_counter.is_some() {
-            // In progress cal
-            gyro_accum[0] += gyro.0 as i32;
-            gyro_accum[1] += gyro.1 as i32;
-            gyro_accum[2] += gyro.2 as i32;
-            *cal_sample_counter.as_mut().unwrap() += 1;
-
-            if cal_sample_counter.unwrap() == GYRO_CAL_SAMPLES {
-                for i in 0..3 {
-                    zencan::OBJECT2010
-                        .set(i, (gyro_accum[i] / GYRO_CAL_SAMPLES as i32) as i16)
-                        .unwrap();
-                }
-                cal_sample_counter = None;
-                zencan::OBJECT2011.set_value(0);
-            }
-        }
-
-        let gyro = offset_gyros(gyro);
-        let accel = offset_accels(accel);
-        store_icm20948_values(gyro, accel, mag).unwrap();
-
-        // Do state estimate update
-        let gyro_rps = gyro_rps_from_raw(gyro);
-        let accel_mpss = accel_mpss_from_raw(accel);
-
-        if let Some(state::FilterSample { pitch, roll, heave }) =
-            filter.push_sample(accel_mpss, gyro_rps)
-        {
-            // Set float tilt
-            zencan::OBJECT2111.set_pitch(pitch);
-            zencan::OBJECT2111.set_roll(roll);
-            // Set integer tilt
-            zencan::OBJECT2110.set_pitch((pitch * 1000.0).round() as i16);
-            zencan::OBJECT2110.set_roll((roll * 1000.0).round() as i16);
-            // Set float heave
-            zencan::OBJECT2101.set_value(heave);
-            // Set integer heave
-            zencan::OBJECT2100.set_value((heave * 100.0).round() as i16);
-
-            zencan::OBJECT2110.set_event_flag(1).ok();
-            zencan::OBJECT2110.set_event_flag(2).ok();
-            zencan::OBJECT2111.set_event_flag(1).ok();
-            zencan::OBJECT2111.set_event_flag(2).ok();
-            zencan::OBJECT2100.set_event_flag(0).ok();
-            zencan::OBJECT2101.set_event_flag(0).ok();
-            notify_can_task();
-        }
-    }
-}
-
 #[interrupt]
 fn EXTI1() {
     hal::gpio::clear_exti_interrupt(1);
     ICM_NOTIFY.notify();
+}
+
+// #[allow(static_mut_refs)]
+// static mut CM7_FRAMER: microstrain_inertial::framer::MessageFramer;
+
+static CM7_FRAMER_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn enable_uart_tx_irq() {
+    pac::USART1.cr1().modify(|w| w.set_txeie(true));
+}
+
+#[allow(static_mut_refs)]
+#[interrupt]
+fn USART1() {
+    static mut CM7_FRAMER: microstrain_inertial::framer::MessageFramer =
+        microstrain_inertial::framer::MessageFramer::new();
+
+    // Safety: Only access the UART in this IRQ
+    let uart = unsafe { UART.as_mut().unwrap() };
+
+    if uart.check_status_flag(stm32_hal2::usart::UsartInterrupt::ReadNotEmpty) {
+        let byte = uart.read_one();
+        match CM7_FRAMER.push_byte(byte) {
+            Ok(Some(packet)) => CM7_IMU.push_message(packet),
+            Ok(None) => (),
+            Err(_) => {
+                CM7_FRAMER_ERROR_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+        };
+    }
+
+    if uart.check_status_flag(stm32_hal2::usart::UsartInterrupt::TransmitEmpty) {
+        let mut buf = [0];
+        let cnt = CM7_IMU.read_outgoing_bytes(&mut buf);
+        if cnt > 0 {
+            uart.write_one(buf[0]);
+        } else {
+            uart.disable_interrupt(hal::usart::UsartInterrupt::TransmitEmpty);
+        }
+    }
 }

@@ -90,8 +90,6 @@ pub async fn cm7_task() -> Infallible {
         if sample_counter == OUTPUT_DECIMATION {
             sample_counter = 0;
             let eulers = quat.to_euler_angles();
-            defmt::info!("Accel: {} {} {}", accel.0, accel.1, accel.2);
-            defmt::info!("CM7: {} {} {}", eulers.roll, eulers.pitch, heave);
             store_cm7_values(eulers.roll, eulers.pitch, heave);
         }
     }

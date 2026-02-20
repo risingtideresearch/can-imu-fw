@@ -382,7 +382,6 @@ impl Cm7Filter {
     pub fn push_sample(&mut self, att: UQ32, accel: (f32, f32, f32)) -> f32 {
         let vert_accel = att.rotate_vector(accel.into())[2];
 
-        defmt::info!("Vert accel: {}", vert_accel);
         self.heave_estimate.update(vert_accel)
     }
 }

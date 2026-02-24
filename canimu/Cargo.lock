@@ -93,6 +93,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "bitflags"
+version = "2.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
+
+[[package]]
 name = "bitvec"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -123,6 +129,7 @@ dependencies = [
  "embedded-io 0.7.1",
  "fdcan",
  "hash32 1.0.0",
+ "heapless 0.9.2",
  "icm20948-rs",
  "lilos",
  "microstrain-inertial",
@@ -134,6 +141,9 @@ dependencies = [
  "rtt-target",
  "stm32-hal2",
  "stm32-metapac 18.0.0",
+ "usb-device",
+ "usbd-dfu-rt",
+ "usbd-gscan",
  "zencan-build",
  "zencan-node",
 ]
@@ -289,7 +299,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "548d977b6da32fa1d1fda2876453da1e7df63ad0304c8b3dae4dbe7b96f39b78"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "defmt-macros",
 ]
 
@@ -384,6 +394,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "embedded-can"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d2e857f87ac832df68fa498d18ddc679175cf3d2e4aa893988e5601baf9438"
+dependencies = [
+ "nb 1.1.0",
+]
+
+[[package]]
 name = "embedded-hal"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -451,7 +470,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a745a7ef1532cc436619631a102c1d2f71e8fd4e82f1ee48c85eaa73c0487e81"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "nb 1.1.0",
  "paste",
  "static_assertions",
@@ -596,6 +615,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "heapless"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af2455f757db2b292a9b1768c4b70186d443bcb3b316252d6b540aec1cd89ed"
+dependencies = [
+ "hash32 0.3.1",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -610,7 +639,7 @@ dependencies = [
  "defmt 1.0.1",
  "device-driver",
  "embedded-hal 1.0.0",
- "heapless",
+ "heapless 0.8.0",
  "libm",
 ]
 
@@ -1269,6 +1298,7 @@ dependencies = [
  "embedded-io 0.6.1",
  "num-traits",
  "paste",
+ "stm32-usbd",
  "stm32g4",
 ]
 
@@ -1288,6 +1318,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a411079520dbccc613af73172f944b7cf97ba84e3bd7381a0352b6ec7bfef03b"
 dependencies = [
  "cortex-m",
+]
+
+[[package]]
+name = "stm32-usbd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e633d559b5fe03caed24e1df85c9fa3916fe6191fc7099ac6fcb0281f380e9f0"
+dependencies = [
+ "cortex-m",
+ "usb-device",
+ "vcell",
 ]
 
 [[package]]
@@ -1481,6 +1522,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
+name = "usb-device"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98816b1accafbb09085168b90f27e93d790b4bfa19d883466b5e53315b5f06a6"
+dependencies = [
+ "heapless 0.8.0",
+ "portable-atomic",
+]
+
+[[package]]
+name = "usbd-dfu-rt"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a81c0651649da3d24f42dc7abac1afd8e44c9717726133bd02b7690dcde2cde"
+dependencies = [
+ "usb-device",
+]
+
+[[package]]
+name = "usbd-gscan"
+version = "0.1.0"
+source = "git+https://github.com/umi-eng/usbd-gscan#0da2ae989459f8943f096ef107bb1017c1d6ae8c"
+dependencies = [
+ "bitflags 2.11.0",
+ "embedded-can",
+ "heapless 0.8.0",
+ "usb-device",
+ "zerocopy",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1621,6 +1693,27 @@ dependencies = [
  "static_cell",
  "zencan-common",
  "zencan-macro",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.7.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

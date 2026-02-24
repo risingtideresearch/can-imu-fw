@@ -20,13 +20,11 @@ use zencan_node::{
 use core::{
     cell::RefCell,
     convert::Infallible,
-    hash::Hasher as _,
     pin::pin,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
-use hash32::FnvHasher;
 use lilos::exec::{Interrupts, Notify};
 use stm32_hal2::{
     self as hal,
@@ -47,8 +45,12 @@ mod cm7_imu;
 mod flash;
 /// ICM20948 IMU support
 mod icm_imu;
+/// Serial number derivation helpers
+mod serial;
 /// state estimation algorithms
 mod state;
+/// USB device logic
+mod usb;
 
 use flash::*;
 
@@ -72,16 +74,6 @@ static CM7_IMU: microstrain_inertial::interface::AsyncInterface =
 /// Callback for zencan to notify task that there are messages to be processed
 fn notify_can_task() {
     CAN_NOTIFY.notify();
-}
-
-/// Compute a 32-bit unique serial number from the UID register value
-fn get_serial() -> u32 {
-    let mut ctx: FnvHasher = Default::default();
-    ctx.write(&pac::UID.uid(0).read().to_le_bytes());
-    ctx.write(&pac::UID.uid(1).read().to_le_bytes());
-    ctx.write(&pac::UID.uid(2).read().to_le_bytes());
-    let digest = ctx.finish();
-    digest as u32
 }
 
 /// A simple delay object which busy loops on the lilos systick timer
@@ -109,8 +101,12 @@ fn main() -> ! {
 
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = hal::pac::Peripherals::take().unwrap();
-    let clock_cfg = hal::clocks::Clocks::default();
+
+    // Setup clocks
+    let mut clock_cfg = hal::clocks::Clocks::default();
+    clock_cfg.hsi48_on = true;
     clock_cfg.setup().unwrap();
+    stm32_hal2::clocks::enable_crs(stm32_hal2::clocks::CrsSyncSrc::Usb);
 
     info!("Sysclk: {}", clock_cfg.sysclk());
     info!("APB1: {}", clock_cfg.apb1());
@@ -211,7 +207,7 @@ fn main() -> ! {
     //
     // Setup zencan node
     //
-    zencan::OBJECT1018.set_serial(get_serial());
+    zencan::OBJECT1018.set_serial(serial::get_serial());
 
     let mut callbacks = Callbacks::default();
     callbacks.store_node_config = Some(&mut store_node_config);
@@ -254,6 +250,7 @@ fn main() -> ! {
                 pin!(can_task(node)),
                 pin!(icm_imu::imu_task(spi, icm_cs)),
                 pin!(cm7_imu::cm7_task()),
+                pin!(usb::usb_task()),
             ],
             lilos::exec::ALL_TASKS,
             Interrupts::Filtered(0xFF),

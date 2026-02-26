@@ -25,33 +25,36 @@ use usbd_gscan::{
 };
 use zencan_node::common::{CanId, CanMessage};
 
-struct DfuOps {}
-struct GsCanDevice {}
-
 /// Just a random magic number
 const MAGIC_JUMP_BOOTLOADER: u32 = 0x1081abcd;
 /// Location of the system memory containing the bootloader
 const SYSTEM_MEMORY_BASE: u32 = 0x1fff0000;
 
+pub static DFU_RESET_REQ: AtomicBool = AtomicBool::new(false);
+
+struct DfuOps {}
+
 impl DfuRuntimeOps for DfuOps {
-    #[allow(static_mut_refs)]
     fn detach(&mut self) {
-        defmt::error!("DETACH");
-        // unsafe {
-        //     jump_bootloader();
-        // }
-        unsafe {
-            MAGIC.as_mut_ptr().write(MAGIC_JUMP_BOOTLOADER);
-        }
-        cortex_m::peripheral::SCB::sys_reset();
+        defmt::info!("DETACH requested");
+        DFU_RESET_REQ.store(true, Ordering::Relaxed);
     }
 }
+
 #[unsafe(link_section = ".uninit.MAGIC")]
 static mut MAGIC: MaybeUninit<u32> = MaybeUninit::uninit();
 
 #[allow(static_mut_refs)]
+fn reset_to_bootloader() {
+    unsafe {
+        MAGIC.as_mut_ptr().write(MAGIC_JUMP_BOOTLOADER);
+    }
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
+#[allow(static_mut_refs)]
 #[cortex_m_rt::pre_init]
-unsafe fn jump_bootloader() {
+unsafe fn check_jump_bootloader() {
     unsafe {
         if MAGIC.assume_init() == MAGIC_JUMP_BOOTLOADER {
             // reset the magic value not to jump again
@@ -84,6 +87,7 @@ const TIMING_DATA: CanBitTimingConst = CanBitTimingConst {
 };
 
 static CAN_ACTIVE: AtomicBool = AtomicBool::new(false);
+struct GsCanDevice {}
 
 impl Device for GsCanDevice {
     fn config(&self) -> DeviceConfig {
@@ -229,6 +233,19 @@ pub async fn usb_task() -> Infallible {
     unsafe { cortex_m::peripheral::NVIC::unmask(hal::pac::Interrupt::USB_LP) };
     let mut last_time = lilos::time::TickTime::now();
     loop {
+        if DFU_RESET_REQ.load(Ordering::Relaxed) {
+            //  Turn off the IMU, because the incoming data causes the system bootloader to go into
+            //  UART mode instead of DFU
+            defmt::info!("Resetting CM7");
+            let f = crate::CM7_IMU
+                .send_command_field(&microstrain_inertial::api::commands::base::ResetDevice {});
+
+            crate::enable_uart_tx_irq();
+            f.await.ok();
+            cortex_m::interrupt::disable();
+            defmt::info!("CM7 reset complete. Rebooting.");
+            reset_to_bootloader();
+        }
         while let Some(msg) = crate::can::dequeue_can_to_usb() {
             if !CAN_ACTIVE.load(Ordering::Relaxed) {
                 continue;

@@ -24,5 +24,8 @@ Boot the board into DFU mode, by turning on DIP switch labeled "DFU", and poweri
 
 Program with dfu-util:
 
-`dfu-util -d 0483:df11 -a 0 -D canimu.bin -s 0x8000000:leave`
+```
+dfu-util -d 1209:2323,0483:df11 -a 0 -D canimu.bin -s 0x8000000:leave
+```
 
+The first VID/PID is for the device, the second is for the ST DFU bootloader.

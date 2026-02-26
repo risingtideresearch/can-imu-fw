@@ -7,6 +7,7 @@ use fdcan::{
     config::{DataBitTiming, FdCanConfig, GlobalFilter},
     filter::{StandardFilter, StandardFilterSlot},
 };
+use heapless::spsc::Queue;
 use stm32_hal2::pac::interrupt;
 
 struct FdCan1 {}
@@ -20,6 +21,10 @@ unsafe impl fdcan::Instance for FdCan1 {
 
 static CAN: Mutex<RefCell<Option<FdCan<FdCan1, NormalOperationMode>>>> =
     Mutex::new(RefCell::new(None));
+static USB_TO_CAN: Mutex<RefCell<Queue<zencan_node::common::CanMessage, 64>>> =
+    Mutex::new(RefCell::new(Queue::new()));
+static CAN_TO_USB: Mutex<RefCell<Queue<zencan_node::common::CanMessage, 64>>> =
+    Mutex::new(RefCell::new(Queue::new()));
 
 fn zencan_to_fdcan_header(msg: &zencan_node::common::CanMessage) -> fdcan::frame::TxFrameHeader {
     let id: fdcan::id::Id = match msg.id() {
@@ -39,6 +44,26 @@ fn zencan_to_fdcan_header(msg: &zencan_node::common::CanMessage) -> fdcan::frame
     }
 }
 
+fn enqueue_can_to_usb(msg: zencan_node::common::CanMessage) {
+    critical_section::with(|cs| {
+        if CAN_TO_USB.borrow_ref_mut(cs).enqueue(msg).is_err() {
+            defmt::warn!("CAN->USB queue full, dropping frame");
+        }
+    });
+}
+
+pub fn dequeue_can_to_usb() -> Option<zencan_node::common::CanMessage> {
+    critical_section::with(|cs| CAN_TO_USB.borrow_ref_mut(cs).dequeue())
+}
+
+pub fn queue_usb_to_can(msg: zencan_node::common::CanMessage) {
+    critical_section::with(|cs| {
+        if USB_TO_CAN.borrow_ref_mut(cs).enqueue(msg).is_err() {
+            defmt::warn!("USB->CAN queue full, dropping frame");
+        }
+    });
+}
+
 /// Move outgoing CAN messages from NODE_MBOX to the CAN controller
 ///
 /// Will move messages until either the hardware FIFO is full, or NODE_MBOX is out of messages.
@@ -49,7 +74,14 @@ fn transmit_can_messages(can: &mut FdCan<FdCan1, NormalOperationMode>) {
         if pac::FDCAN1.txfqs().read().tfqf() {
             break;
         }
-        if let Some(msg) = crate::zencan::NODE_MBOX.next_transmit_message() {
+        let msg = if let Some(msg) = crate::zencan::NODE_MBOX.next_transmit_message() {
+            enqueue_can_to_usb(msg);
+            Some(msg)
+        } else {
+            critical_section::with(|cs| USB_TO_CAN.borrow_ref_mut(cs).dequeue())
+        };
+
+        if let Some(msg) = msg {
             let header = zencan_to_fdcan_header(&msg);
             if let Err(_) = can.transmit_preserve(header, msg.data(), &mut |_, _, _| {
                 defmt::info!("Cancelled transmission");
@@ -155,6 +187,7 @@ fn FDCAN1_IT0() {
             };
             let msg =
                 zencan_node::common::messages::CanMessage::new(id, &buffer[..msg.len as usize]);
+            enqueue_can_to_usb(msg);
             // Ignore error -- as an Err is returned for messages that are not consumed by the node
             // stack
             crate::zencan::NODE_MBOX.store_message(msg).ok();

@@ -136,8 +136,8 @@ fn main() -> ! {
             }
 
             while usb_serial.flush().err() == Some(UsbError::WouldBlock) {
-            usb_dev.poll(&mut [&mut usb_serial]);
-        }
+                usb_dev.poll(&mut [&mut usb_serial]);
+            }
         }
 
         if let Ok(count) = usb_serial.read(&mut rx_buf) {

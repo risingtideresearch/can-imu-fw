@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CAN IMU WebUSB POC</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>CAN IMU WebUSB POC</h1>
+      <p class="sub">Receive <code>gs_usb</code> CAN frames (NMEA2000) in the browser.</p>
+
+      <section class="controls">
+        <label>
+          Bitrate
+          <select id="bitrate">
+            <option value="250000" selected>250000 (NMEA2000)</option>
+            <option value="500000">500000</option>
+            <option value="125000">125000</option>
+          </select>
+        </label>
+
+        <label class="checkbox">
+          <input id="showRaw" type="checkbox" />
+          Show raw frame log
+        </label>
+
+        <div class="buttons">
+          <button id="connect">Connect</button>
+          <button id="disconnect" disabled>Disconnect</button>
+          <button id="clear">Clear</button>
+        </div>
+      </section>
+
+      <section class="statusRow">
+        <div>Status: <span id="status">Idle</span></div>
+        <div>Frames: <span id="count">0</span></div>
+      </section>
+
+      <section>
+        <table class="latestTable">
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>PGN</th>
+              <th>Priority</th>
+              <th>Plot</th>
+              <th>Value</th>
+              <th>Age</th>
+              <th>Avg Freq</th>
+            </tr>
+          </thead>
+          <tbody id="latestRows"></tbody>
+        </table>
+      </section>
+
+      <section class="plots">
+        <canvas id="heavePlot" class="plotCanvas"></canvas>
+
+        <canvas id="pitchPlot" class="plotCanvas"></canvas>
+
+        <canvas id="rollPlot" class="plotCanvas"></canvas>
+      </section>
+
+      <section id="rawSection" class="hidden">
+        <h2>Raw Frames</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>CAN ID</th>
+              <th>PGN</th>
+              <th>Source</th>
+              <th>Priority</th>
+              <th>DLC</th>
+              <th>Data</th>
+            </tr>
+          </thead>
+          <tbody id="rawFrames"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Log</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

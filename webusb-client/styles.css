@@ -1,0 +1,145 @@
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: #14213d;
+  background: linear-gradient(135deg, #f8fbff, #ecf3ff);
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  margin-bottom: 6px;
+}
+
+.sub {
+  margin-top: 0;
+  color: #4a5568;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin: 16px 0;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  padding: 8px;
+}
+
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.statusRow {
+  display: flex;
+  gap: 24px;
+  margin: 10px 0 14px;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.latestTable {
+  table-layout: fixed;
+}
+
+.latestTable th:nth-child(1),
+.latestTable td:nth-child(1) {
+  width: 140px;
+}
+
+.latestTable th:nth-child(2),
+.latestTable td:nth-child(2) {
+  width: 150px;
+}
+
+.latestTable th:nth-child(3),
+.latestTable td:nth-child(3) {
+  width: 70px;
+}
+
+.latestTable th:nth-child(4),
+.latestTable td:nth-child(4) {
+  width: 60px;
+}
+
+.latestTable th:nth-child(6),
+.latestTable td:nth-child(6) {
+  width: 75px;
+}
+
+.latestTable th:nth-child(7),
+.latestTable td:nth-child(7) {
+  width: 95px;
+}
+
+th,
+td {
+  border: 1px solid #d9e2f1;
+  text-align: left;
+  padding: 7px;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 13px;
+}
+
+thead {
+  background: #edf2ff;
+}
+
+#log {
+  background: #0f172a;
+  color: #d6e3ff;
+  min-height: 110px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.hidden {
+  display: none;
+}
+
+.plots {
+  margin-top: 18px;
+}
+
+.plotCanvas {
+  width: 100%;
+  height: 260px;
+  display: block;
+  border: 1px solid #d9e2f1;
+  background: #fff;
+  margin-bottom: 12px;
+}

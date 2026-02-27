@@ -1,3 +1,4 @@
+//! State estimation
 use num_quaternion::{Q32, ReadMat3x3, UQ32};
 use num_traits::Float;
 

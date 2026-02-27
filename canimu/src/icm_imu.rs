@@ -6,11 +6,18 @@ use icm20948::{
     sensors::{AccelConfig, GyroConfig},
 };
 use stm32_hal2::gpio::Pin;
-use zencan_node::{common::sdo::AbortCode, object_dict::ObjectAccess as _};
+use zencan_node::{
+    common::{CanMessage, sdo::AbortCode},
+    object_dict::ObjectAccess as _,
+};
 
 use num_traits::float::Float;
 
-use crate::{Delay, ICM_NOTIFY, notify_can_task, state, zencan};
+use crate::{
+    Delay, ICM_NOTIFY,
+    n2k_frames::{AttitudeFrame, HeaveFrame, N2kId},
+    notify_can_task, state, zencan,
+};
 
 fn gyro_rps_from_raw(gyro: (i16, i16, i16)) -> (f32, f32, f32) {
     const DEG2RAD: f32 = core::f32::consts::PI / 180.0;
@@ -256,6 +263,37 @@ pub async fn imu_task<S: embedded_hal::spi::SpiBus>(spi: S, cs: Pin) -> Infallib
             zencan::OBJECT2100.set_event_flag(0).ok();
             zencan::OBJECT2101.set_event_flag(0).ok();
             notify_can_task();
+
+            // Send N2k messages
+            let n2k_addr = zencan::OBJECT2200.get_icm_nmea_address();
+            let att_packet = AttitudeFrame {
+                sid: 0xFF, // NA
+                yaw: None,
+                pitch: Some(pitch),
+                roll: Some(roll),
+            };
+            const PRIO: u8 = 0;
+            let mut data = [0; 8];
+            att_packet.encode(&mut data);
+            if crate::can::send_n2k_message(CanMessage::new(
+                N2kId::new(PRIO, AttitudeFrame::PGN, n2k_addr).as_can_id(),
+                &data,
+            ))
+            .is_err()
+            {
+                defmt::error!("N2K Message Buffer Overrun");
+            }
+
+            let heave_packet = HeaveFrame { sid: 0xFF, heave };
+            heave_packet.encode(&mut data);
+            if crate::can::send_n2k_message(CanMessage::new(
+                N2kId::new(PRIO, HeaveFrame::PGN, n2k_addr).as_can_id(),
+                &data,
+            ))
+            .is_err()
+            {
+                defmt::error!("N2K Message Buffer Overrun");
+            }
         }
     }
 }

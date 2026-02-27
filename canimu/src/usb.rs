@@ -1,12 +1,11 @@
 use core::{
-    cell::RefCell,
+    cell::UnsafeCell,
     convert::Infallible,
     mem::MaybeUninit,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
-use critical_section::{CriticalSection, Mutex};
 use embedded_can::{ExtendedId, Frame as _, Id, StandardId};
 use stm32_hal2::{
     self as hal,
@@ -21,7 +20,6 @@ use usbd_gscan::{
         CanBitTimingConst, CanState, DeviceBitTiming, DeviceBitTimingConst,
         DeviceBitTimingConstExtended, DeviceConfig, DeviceState, Feature, FrameFlag,
     },
-    identifier,
 };
 use zencan_node::common::{CanId, CanMessage};
 
@@ -168,37 +166,45 @@ fn zencan_to_gscan_frame(msg: CanMessage) -> Option<usbd_gscan::host::Frame> {
 }
 
 struct Global<T> {
-    value: Mutex<RefCell<Option<T>>>,
+    value: UnsafeCell<MaybeUninit<T>>,
+    stored: AtomicBool,
 }
 
 impl<T> Global<T> {
     pub const fn empty() -> Self {
         Self {
-            value: Mutex::new(RefCell::new(None)),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+            stored: AtomicBool::new(false),
         }
     }
 
+    /// Get the object using a critical section
+    ///
+    /// This does not check if the object has been initialized
     pub fn with<F: FnOnce(&mut T)>(&self, f: F) {
-        critical_section::with(|cs| {
-            let mut value = self.value.borrow_ref_mut(cs);
-            f(value.as_mut().unwrap());
+        if !self.stored.load(Ordering::Acquire) {
+            panic!("Global not initialized");
+        }
+        critical_section::with(|_cs| unsafe {
+            let value = &mut *self.value.get();
+            f(value.assume_init_mut());
         });
     }
 
     pub fn init(&self, value: T) {
-        critical_section::with(|cs| {
-            let mut inner = self.value.borrow_ref_mut(cs);
-            *inner = Some(value);
-        });
+        unsafe {
+            core::ptr::write(self.value.get(), MaybeUninit::new(value));
+        }
+        self.stored.store(true, Ordering::Release);
     }
 
     /// Only safe to call if you know that know other reference can exist
     pub unsafe fn steal(&self) -> &mut T {
-        let cs = unsafe { CriticalSection::new() };
-        let mut value = self.value.borrow_ref_mut(cs);
-        unsafe { core::mem::transmute(value.as_mut().unwrap()) }
+        unsafe { (&mut *self.value.get()).assume_init_mut() }
     }
 }
+
+unsafe impl<T> Sync for Global<T> {}
 
 static BUS_ALLOCATOR: Global<UsbBusAllocator<UsbBus<Peripheral>>> = Global::empty();
 static USB_DEV: Global<UsbDevice<'static, UsbBus<Peripheral>>> = Global::empty();
@@ -214,7 +220,9 @@ pub async fn usb_task() -> Infallible {
     let dfu = DfuRuntimeClass::new(unsafe { BUS_ALLOCATOR.steal() }, DfuOps {});
 
     let serial = crate::serial::get_serial_str();
-    let usb_dev = UsbDeviceBuilder::new(unsafe { BUS_ALLOCATOR.steal() }, identifier::CANDLELIGHT)
+    //let vid_pid = identifier::CANDLELIGHT;
+    let vid_pid = UsbVidPid(0x1209, 0x81fe);
+    let usb_dev = UsbDeviceBuilder::new(unsafe { BUS_ALLOCATOR.steal() }, vid_pid)
         .strings(&[StringDescriptors::default()
             .manufacturer("Rising Tide Research Foundation")
             .product("CAN IMU")
@@ -269,6 +277,7 @@ pub async fn usb_task() -> Infallible {
 
 use stm32_hal2::pac::interrupt;
 #[interrupt]
+#[allow(static_mut_refs)]
 fn USB_LP() {
     let usb_dev = unsafe { USB_DEV.steal() };
     let dfu = unsafe { DFU.steal() };

@@ -37,19 +37,13 @@ use stm32_metapac as pac;
 
 use rjmp_stm32_flash::Stm32gxPagePair;
 
-/// can module wires up CAN message sending and receiving
 mod can;
-// 3DM-CM7 IMU support
 mod cm7_imu;
-/// Flash storage utiltiies / definitions
 mod flash;
-/// ICM20948 IMU support
 mod icm_imu;
-/// Serial number derivation helpers
+mod n2k_frames;
 mod serial;
-/// state estimation algorithms
 mod state;
-/// USB device logic
 mod usb;
 
 use flash::*;
@@ -275,13 +269,12 @@ fn EXTI1() {
     ICM_NOTIFY.notify();
 }
 
-// #[allow(static_mut_refs)]
-// static mut CM7_FRAMER: microstrain_inertial::framer::MessageFramer;
-
 static CM7_FRAMER_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn enable_uart_tx_irq() {
-    pac::USART1.cr1().modify(|w| w.set_txeie(true));
+    critical_section::with(|_| {
+        pac::USART1.cr1().modify(|w| w.set_txeie(true));
+    });
 }
 
 #[allow(static_mut_refs)]

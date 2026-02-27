@@ -1,5 +1,5 @@
 device_name = "canimu"
-software_version = "v0.0.1"
+software_version = "v0.0.2"
 hardware_version = "rev1"
 heartbeat_period = 1000
 autostart = "enabled"
@@ -15,7 +15,7 @@ num_rpdo = 0
 
 # ICM 20948 gyros
 [pdos.tpdo.0]
-enabled = true
+enabled = false
 cob_id = 0x200
 add_node_id = false
 transmission_type = 254
@@ -27,7 +27,7 @@ mappings = [
 
 # ICM 20948 accels
 [pdos.tpdo.1]
-enabled = true
+enabled = false
 cob_id = 0x201
 add_node_id = false
 transmission_type = 254
@@ -39,7 +39,7 @@ mappings = [
 
 # ICM20948 Heave
 [pdos.tpdo.2]
-enabled = true
+enabled = false
 cob_id = 0x202
 add_node_id = false
 transmission_type = 254
@@ -49,7 +49,7 @@ mappings = [
 
 # ICM20948 Pitch/roll output
 [pdos.tpdo.3]
-enabled = true
+enabled = false
 cob_id = 0x203
 add_node_id = false
 transmission_type = 254
@@ -60,7 +60,7 @@ mappings = [
 
 # CM7 Heave
 [pdos.tpdo.4]
-enabled = true
+enabled = false
 cob_id = 0x302
 add_node_id = false
 transmission_type = 254
@@ -70,7 +70,7 @@ mappings = [
 
 # CM7 pitch/roll
 [pdos.tpdo.5]
-enabled = true
+enabled = false
 cob_id = 0x303
 add_node_id = false
 transmission_type = 254
@@ -318,12 +318,25 @@ field_name = "nmea_enabled"
 data_type = "uint8"
 access_type = "ro"
 pdo_mapping = "none"
+# The node address used for broadcasting microstrain data
 [[objects.subs]]
 sub_index = 2
-parameter_name = "Node Address"
-field_name = "nmea_address"
+parameter_name = "3DM-CV7 Node Address"
+field_name = "cv7_nmea_address"
 data_type = "uint8"
-access_type = "ro"
+access_type = "const"
 pdo_mapping = "none"
+default_value = 101
+# The node address used for broadcasting ICM20948 data
+[[objects.subs]]
+sub_index = 3
+parameter_name = "ICM Node Address"
+field_name = "icm_nmea_address"
+data_type = "uint8"
+access_type = "const"
+pdo_mapping = "none"
+default_value = 102
+
+
 
 

@@ -8,7 +8,9 @@ use fdcan::{
     filter::{StandardFilter, StandardFilterSlot},
 };
 use heapless::spsc::Queue;
+use mutex::BlockingMutex;
 use stm32_hal2::pac::interrupt;
+use zencan_node::common::CanMessage;
 
 struct FdCan1 {}
 
@@ -21,12 +23,27 @@ unsafe impl fdcan::Instance for FdCan1 {
 
 static CAN: Mutex<RefCell<Option<FdCan<FdCan1, NormalOperationMode>>>> =
     Mutex::new(RefCell::new(None));
-static USB_TO_CAN: Mutex<RefCell<Queue<zencan_node::common::CanMessage, 64>>> =
-    Mutex::new(RefCell::new(Queue::new()));
-static CAN_TO_USB: Mutex<RefCell<Queue<zencan_node::common::CanMessage, 64>>> =
-    Mutex::new(RefCell::new(Queue::new()));
 
-fn zencan_to_fdcan_header(msg: &zencan_node::common::CanMessage) -> fdcan::frame::TxFrameHeader {
+const USB_BUFFER_DEPTH: usize = 64;
+static USB_TO_CAN: Mutex<RefCell<Queue<CanMessage, USB_BUFFER_DEPTH>>> =
+    Mutex::new(RefCell::new(Queue::new()));
+static CAN_TO_USB: Mutex<RefCell<Queue<CanMessage, USB_BUFFER_DEPTH>>> =
+    Mutex::new(RefCell::new(Queue::new()));
+const N2K_BUFFER_DEPTH: usize = 12;
+static N2K_CAN_MESSAGES: BlockingMutex<
+    mutex::raw_impls::cs::CriticalSectionRawMutex,
+    Queue<CanMessage, N2K_BUFFER_DEPTH>,
+> = BlockingMutex::new(Queue::new());
+
+pub fn send_n2k_message(msg: CanMessage) -> Result<(), CanMessage> {
+    // Attempt to queue message. Will return Err if full.
+    N2K_CAN_MESSAGES.with_lock(|q| q.enqueue(msg))?;
+    // If message queue'd, call transmit notify to make sure it gets sent to peripheral
+    transmit_notify_handler();
+    Ok(())
+}
+
+fn zencan_to_fdcan_header(msg: &CanMessage) -> fdcan::frame::TxFrameHeader {
     let id: fdcan::id::Id = match msg.id() {
         zencan_node::common::messages::CanId::Extended(id) => {
             fdcan::id::ExtendedId::new(id).unwrap().into()
@@ -44,7 +61,7 @@ fn zencan_to_fdcan_header(msg: &zencan_node::common::CanMessage) -> fdcan::frame
     }
 }
 
-fn enqueue_can_to_usb(msg: zencan_node::common::CanMessage) {
+fn enqueue_can_to_usb(msg: CanMessage) {
     critical_section::with(|cs| {
         if CAN_TO_USB.borrow_ref_mut(cs).enqueue(msg).is_err() {
             defmt::warn!("CAN->USB queue full, dropping frame");
@@ -52,11 +69,11 @@ fn enqueue_can_to_usb(msg: zencan_node::common::CanMessage) {
     });
 }
 
-pub fn dequeue_can_to_usb() -> Option<zencan_node::common::CanMessage> {
+pub fn dequeue_can_to_usb() -> Option<CanMessage> {
     critical_section::with(|cs| CAN_TO_USB.borrow_ref_mut(cs).dequeue())
 }
 
-pub fn queue_usb_to_can(msg: zencan_node::common::CanMessage) {
+pub fn queue_usb_to_can(msg: CanMessage) {
     critical_section::with(|cs| {
         if USB_TO_CAN.borrow_ref_mut(cs).enqueue(msg).is_err() {
             defmt::warn!("USB->CAN queue full, dropping frame");
@@ -74,7 +91,14 @@ fn transmit_can_messages(can: &mut FdCan<FdCan1, NormalOperationMode>) {
         if pac::FDCAN1.txfqs().read().tfqf() {
             break;
         }
-        let msg = if let Some(msg) = crate::zencan::NODE_MBOX.next_transmit_message() {
+
+        // Try to get a message to send. Priority is N2K > zencan > USB
+        let msg = if let Some(msg) = N2K_CAN_MESSAGES.with_lock(|q| q.dequeue()) {
+            // Echo node outgoing messages to USB adapter
+            enqueue_can_to_usb(msg);
+            Some(msg)
+        } else if let Some(msg) = crate::zencan::NODE_MBOX.next_transmit_message() {
+            // Echo node outgoing messages to USB adapter
             enqueue_can_to_usb(msg);
             Some(msg)
         } else {
@@ -82,6 +106,7 @@ fn transmit_can_messages(can: &mut FdCan<FdCan1, NormalOperationMode>) {
         };
 
         if let Some(msg) = msg {
+            //defmt::info!("Sending message ID  0x{:X}", msg.id().raw());
             let header = zencan_to_fdcan_header(&msg);
             if let Err(_) = can.transmit_preserve(header, msg.data(), &mut |_, _, _| {
                 defmt::info!("Cancelled transmission");

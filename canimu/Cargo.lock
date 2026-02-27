@@ -135,6 +135,7 @@ dependencies = [
  "lazy_static",
  "lilos",
  "microstrain-inertial",
+ "mutex",
  "num-quaternion",
  "num-traits",
  "panic-probe",
@@ -815,6 +816,16 @@ checksum = "5f98efec8807c63c752b5bd61f862c165c115b0a35685bdcfd9238c7aeb592b7"
 dependencies = [
  "cfg-if",
  "unicode-width",
+]
+
+[[package]]
+name = "mutex"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f23bf5944734b7a5d1bd0a9b594213dd04de471fd3d3a1bfce672913dd72d606"
+dependencies = [
+ "critical-section",
+ "mutex-traits",
 ]
 
 [[package]]

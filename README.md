@@ -8,6 +8,7 @@ Work in progress.
 
 - `canimu`: The main IMU application
 - `usb-serial-bridge`: An application to forward the 3DM-CV7 UART to a USB serial port to allow talking to the IMU from a PC
+- `web-client`: A javascript client for displaying data from the IMU using WebUSB. 
 
 ## Programming via DFU
 

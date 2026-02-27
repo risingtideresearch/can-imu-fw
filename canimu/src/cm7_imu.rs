@@ -1,10 +1,19 @@
 use core::convert::Infallible;
 
-use microstrain_inertial::{api::commands::imu_3dm::DescriptorRate, api::data::filter};
+use microstrain_inertial::api::{
+    commands::{self, imu_3dm::DescriptorRate},
+    data::filter,
+};
 use num_quaternion::Q32;
-use zencan_node::object_dict::ObjectAccess;
+use zencan_node::{common::CanMessage, object_dict::ObjectAccess};
 
-use crate::{enable_uart_tx_irq, notify_can_task, state::Cm7Filter, zencan};
+use crate::{
+    enable_uart_tx_irq,
+    n2k_frames::{AttitudeFrame, HeaveFrame, N2kId},
+    notify_can_task,
+    state::Cm7Filter,
+    zencan,
+};
 
 use num_traits::float::Float;
 
@@ -38,6 +47,16 @@ pub async fn cm7_task() -> Infallible {
     // the CM7 driver really needs a callback...
     enable_uart_tx_irq();
     f.await.expect("Failed to configure CM7 message format");
+
+    // Setup installation orientation to match the ICM / desired frame relative to the PCB
+    let transform_cmd = commands::imu_3dm::SensorToVehicleFrameTransformationEuler::Write {
+        pitch_rad: 0.0,
+        roll_rad: 0.0,
+        yaw_rad: core::f32::consts::FRAC_PI_2,
+    };
+    let f = cm7.send_command_field(&transform_cmd);
+    enable_uart_tx_irq();
+    f.await.expect("Failed to configure 3DM transform");
 
     defmt::info!("Completed CM7 init");
 
@@ -91,6 +110,37 @@ pub async fn cm7_task() -> Infallible {
             sample_counter = 0;
             let eulers = quat.to_euler_angles();
             store_cm7_values(eulers.roll, eulers.pitch, heave);
+
+            // Send N2k messages
+            let n2k_addr = zencan::OBJECT2200.get_cv7_nmea_address();
+            let att_packet = AttitudeFrame {
+                sid: 0xFF, // NA
+                yaw: Some(eulers.yaw),
+                pitch: Some(eulers.pitch),
+                roll: Some(eulers.roll),
+            };
+            const PRIO: u8 = 0;
+            let mut data = [0; 8];
+            att_packet.encode(&mut data);
+            if crate::can::send_n2k_message(CanMessage::new(
+                N2kId::new(PRIO, AttitudeFrame::PGN, n2k_addr).as_can_id(),
+                &data,
+            ))
+            .is_err()
+            {
+                defmt::error!("N2K Message Buffer Overrun");
+            }
+
+            let heave_packet = HeaveFrame { sid: 0xFF, heave };
+            heave_packet.encode(&mut data);
+            if crate::can::send_n2k_message(CanMessage::new(
+                N2kId::new(PRIO, HeaveFrame::PGN, n2k_addr).as_can_id(),
+                &data,
+            ))
+            .is_err()
+            {
+                defmt::error!("N2K Message Buffer Overrun");
+            }
         }
     }
 }

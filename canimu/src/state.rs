@@ -4,7 +4,7 @@ use num_traits::Float;
 
 use crate::icm_imu::G_MPSS;
 
-const HEAVE_TAU: f32 = 15.0; // seconds
+const HEAVE_TAU: f32 = 30.0; // seconds
 
 #[derive(Clone, Copy, Debug)]
 struct Tilt {
